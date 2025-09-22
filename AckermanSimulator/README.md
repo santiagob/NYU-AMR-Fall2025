@@ -1,7 +1,8 @@
 # Ackermann Simulator
 
+Quick reference for the updated CLI and scheduling workflow used by this simulator.
 
-## Controls:
+## Controls (interactive GUI)
 - Hold `Up` / `Down`: Increase / decrease speed command
 - Hold `Left` / `Right`: Steer left / right (degrees)
 - `Space`: Pause / Unpause
@@ -9,44 +10,56 @@
 - `s`: Immediate stop (zero speed)
 - `e`: Toggle external schedule on/off
 
-## Using external schedules:
-- Sample schedule CSV available at `schedules/sample_schedule.csv`.
-- In Python, load it before running the simulator (from the project root):
+When an external schedule is enabled, scheduled entries override keyboard commands for the duration of the active interval.
 
-- Run the simulator and press `e` to enable the schedule. Scheduled entries override keyboard input while active.
+## Schedule files
+- Example schedules are stored in `AckermanSimulator/schedules/` (e.g. `example_constant.csv`, `example_ramp_turn.csv`, `example_maneuver.csv`).
 
-Schedule CLI and CSV
+Format (CSV, header optional):
+- Standard constant row: `start,end,speed,steer` (times in seconds, `speed` in m/s, `steer` in degrees).
+	- Example: `0.0,3.0,2.0,10.0`
 
-- You can load a schedule at startup using the simulator's built-in CLI flags:
+- Parametric ramp rows: include `mode=ramp` (or `mode=accel`) and either `v0`+`accel` or `v0`+`v1`.
+	- Example:
+		```csv
+		start,end,mode,v0,accel,steer
+		0.0,5.0,ramp,0.0,0.5,0.0
+		5.0,10.0,ramp,2.5,0.0,10.0
+		```
+	- The loader expands ramp rows into per-`DT` (time-step) entries automatically so the simulation can match intervals precisely.
 
+## CLI Usage (headless or interactive)
+
+- Run interactive GUI and load a schedule (press `e` to toggle schedule if you don't pass `--enable`):
 ```bash
-python AckermanSimulator/Simulator.py --schedule schedules/sample_schedule.csv --enable
+python AckermanSimulator/Simulator.py -s example_constant.csv --enable
 ```
 
-- Flags:
-	- `--schedule, -s PATH` : Path to a CSV schedule file to load at startup.
-	- `--enable` : If present, the loaded schedule is enabled immediately (otherwise press `e` in the running window to toggle).
-
-
-### External Inputs
-- CSV format: header columns `start,end,speed,steer` (times in seconds, `speed` in m/s, `steer` in degrees). Example row:
-
+- Headless export (runs a deterministic batch simulation and writes images/CSV):
+```bash
+python AckermanSimulator/Simulator.py -s example_ramp_turn.csv --enable --export myrun
 ```
-0.0,3.0,2.0,10.0
+This creates these files under `AckermanSimulator/output/` by default:
+- `myrun_trajectory.png` (aerial path with start/end heading arrows)
+- `myrun_dynamics.png` (speed, steer, yaw_rate, lateral accel, yaw)
+- `myrun_history.csv` (time series CSV)
+
+Notes on `--schedule` resolution
+- The `--schedule`/`-s` argument accepts:
+	1. An exact path you've provided (absolute or relative), or
+	2. A basename which will be looked up in `AckermanSimulator/schedules/`, or
+	3. The basename with `.csv` appended if needed.
+
+- If the loader cannot find the schedule, the script now prints a clear error and exits without creating any output files. The error shows the absolute paths it attempted, e.g.:
 ```
-
-Parametric schedules (ramps)
-
-You can create compact parametric rows using `mode=ramp` (or `mode=accel`) and either `v0`+`accel` or `v0`+`v1` to specify a linear ramp. The loader will expand these rows into per-`DT` entries automatically.
-
-Example `schedules/ramp_schedule.csv`:
-
+ERROR: schedule file not found. Tried the following absolute paths:
+	- /full/path/you/passed
+	- /full/path/to/AckermanSimulator/schedules/you/passed
+	- /full/path/to/AckermanSimulator/schedules/you/passed.csv
 ```
-start,end,mode,v0,accel,steer
-0.0,5.0,ramp,0.0,0.5,0.0
-5.0,10.0,ramp,2.5,0.0,10.0
-```
+(the `ERROR` line is printed in red in terminals that support ANSI colors)
 
-- `v0`: initial speed at `start` (m/s)
-- `accel`: constant acceleration (m/s^2)
-- loader expands ramp rows into `DT`-sized steps so the simulator can match intervals without changing runtime logic.
+Export path behavior
+- `--export <name>`: if `<name>` contains no path separators it is treated as a basename and the outputs are written to `AckermanSimulator/output/<name>_...`.
+- If you supply a path that begins with `output/`, it will be routed to the script-local `AckermanSimulator/output/` folder for consistency.
+- If you pass an absolute path or another directory explicitly, the script will respect it and write outputs there (creating the directory if necessary).
