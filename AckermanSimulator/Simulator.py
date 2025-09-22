@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -261,6 +262,15 @@ def export_simulation_image(path, histories, show_car=False):
     ax0.plot(histories['x'], histories['y'], '-b')
     ax0.scatter(histories['x'][0], histories['y'][0], c='g', label='start')
     ax0.scatter(histories['x'][-1], histories['y'][-1], c='r', label='end')
+    # Draw heading arrows at start and end
+    try:
+        yaw0 = float(histories['yaw'][0])
+        yawf = float(histories['yaw'][-1])
+        arrow_len = max(0.5, np.linalg.norm([histories['x'][-1]-histories['x'][0], histories['y'][-1]-histories['y'][0]]) * 0.05)
+        ax0.arrow(histories['x'][0], histories['y'][0], arrow_len * math.cos(yaw0), arrow_len * math.sin(yaw0), head_width=0.2, head_length=0.3, fc='g', ec='g')
+        ax0.arrow(histories['x'][-1], histories['y'][-1], arrow_len * math.cos(yawf), arrow_len * math.sin(yawf), head_width=0.2, head_length=0.3, fc='r', ec='r')
+    except Exception:
+        pass
     ax0.set_aspect('equal')
     ax0.set_xlabel('X [m]')
     ax0.set_ylabel('Y [m]')
@@ -313,6 +323,15 @@ def export_simulation_images(path, histories, show_car=False):
     ax.plot(histories['x'], histories['y'], '-b')
     ax.scatter(histories['x'][0], histories['y'][0], c='g', label='start')
     ax.scatter(histories['x'][-1], histories['y'][-1], c='r', label='end')
+    # Draw heading arrows at start and end
+    try:
+        yaw0 = float(histories['yaw'][0])
+        yawf = float(histories['yaw'][-1])
+        arrow_len = max(0.5, np.linalg.norm([histories['x'][-1]-histories['x'][0], histories['y'][-1]-histories['y'][0]]) * 0.05)
+        ax.arrow(histories['x'][0], histories['y'][0], arrow_len * math.cos(yaw0), arrow_len * math.sin(yaw0), head_width=0.2, head_length=0.3, fc='g', ec='g')
+        ax.arrow(histories['x'][-1], histories['y'][-1], arrow_len * math.cos(yawf), arrow_len * math.sin(yawf), head_width=0.2, head_length=0.3, fc='r', ec='r')
+    except Exception:
+        pass
     ax.set_aspect('equal')
     ax.set_xlabel('X [m]')
     ax.set_ylabel('Y [m]')
@@ -772,24 +791,80 @@ if __name__ == "__main__":
     parser.add_argument('--duration', type=float, help='Duration (s) to use for export run (overrides schedule end)')
     args = parser.parse_args()
 
+    # Helper: script-local directories
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # schedules are stored at repository root `schedules/` (one level up from script dir)
+    schedules_dir = os.path.join(script_dir, 'schedules')
+    default_output_dir = os.path.join(script_dir, 'output')
+
+    # Resolve schedule path: prefer user-provided path, otherwise try schedules/ folder
+    schedule_path = None
+    tried_paths = []
     if args.schedule:
+        # absolute path of user-provided value
+        tried_paths.append(os.path.abspath(args.schedule))
+        if os.path.exists(args.schedule):
+            schedule_path = args.schedule
+        else:
+            candidate = os.path.join(schedules_dir, args.schedule)
+            tried_paths.append(os.path.abspath(candidate))
+            if os.path.exists(candidate):
+                schedule_path = candidate
+            else:
+                candidate2 = os.path.join(schedules_dir, args.schedule + '.csv')
+                tried_paths.append(os.path.abspath(candidate2))
+                if os.path.exists(candidate2):
+                    schedule_path = candidate2
+
+    if args.schedule and not schedule_path:
+        import sys
+        RED = '\033[91m'
+        RESET = '\033[0m'
+        print(f"{RED}ERROR: schedule file not found. Tried the following absolute paths:{RESET}")
+        for p in tried_paths:
+            print('  -', p)
+        # Do not create outputs if the schedule failed to open; exit with non-zero
+        sys.exit(1)
+
+    if schedule_path:
         try:
-            load_schedule_from_csv(args.schedule)
-            print(f'Loaded schedule from {args.schedule}')
+            load_schedule_from_csv(schedule_path)
+            print(f'Loaded schedule from {schedule_path}')
         except Exception as e:
-            print(f'Failed to load schedule from {args.schedule}: {e}')
+            print(f'Failed to load schedule from {schedule_path}: {e}')
 
     if args.enable:
         external_enabled = True
 
     # If export requested, run batch simulation and exit
     if args.export:
+        # Create output dir now that we know schedule succeeded (if provided)
+        os.makedirs(default_output_dir, exist_ok=True)
         # If a schedule was loaded above, use external_schedule; otherwise None
         histories = batch_simulate(schedule=external_schedule if external_schedule else None, duration=args.duration)
-        traj_path, dyn_path = export_simulation_images(args.export, histories)
+
+        # Resolve export path: put files under script-level output folder by default
+        export_arg = args.export
+        # If user passes a bare basename, place it under default_output_dir
+        if os.path.sep not in export_arg:
+            export_path = os.path.join(default_output_dir, export_arg)
+        else:
+            # If they explicitly used the 'output' directory, route to the script-level default_output_dir
+            parts = export_arg.split(os.path.sep)
+            if parts[0] == 'output':
+                export_path = os.path.join(default_output_dir, *parts[1:])
+            else:
+                export_path = export_arg
+
+        # Ensure parent directory exists
+        export_parent = os.path.dirname(os.path.abspath(export_path))
+        if export_parent:
+            os.makedirs(export_parent, exist_ok=True)
+
+        traj_path, dyn_path = export_simulation_images(export_path, histories)
         print(f'Exported trajectory to {traj_path}')
         print(f'Exported dynamics to {dyn_path}')
-        csv_path = save_histories_csv(args.export, histories)
+        csv_path = save_histories_csv(export_path, histories)
         print(f'Exported histories CSV to {csv_path}')
     else:
         main()
