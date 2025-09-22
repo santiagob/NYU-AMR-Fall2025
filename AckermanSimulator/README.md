@@ -34,3 +34,19 @@ python AckermanSimulator/Simulator.py --schedule schedules/sample_schedule.csv -
 ```
 0.0,3.0,2.0,10.0
 ```
+
+Parametric schedules (ramps)
+
+You can create compact parametric rows using `mode=ramp` (or `mode=accel`) and either `v0`+`accel` or `v0`+`v1` to specify a linear ramp. The loader will expand these rows into per-`DT` entries automatically.
+
+Example `schedules/ramp_schedule.csv`:
+
+```
+start,end,mode,v0,accel,steer
+0.0,5.0,ramp,0.0,0.5,0.0
+5.0,10.0,ramp,2.5,0.0,10.0
+```
+
+- `v0`: initial speed at `start` (m/s)
+- `accel`: constant acceleration (m/s^2)
+- loader expands ramp rows into `DT`-sized steps so the simulator can match intervals without changing runtime logic.

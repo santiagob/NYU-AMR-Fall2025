@@ -36,17 +36,54 @@ def load_schedule_from_csv(path):
     Times in seconds, steer in degrees.
     """
     import csv
-    sched = []
+    raw_rows = []
     with open(path, newline='') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            sched.append({
-                'start': float(row['start']),
-                'end': float(row['end']),
-                'speed': float(row['speed']),
-                'steer': float(row['steer'])
-            })
-    set_external_schedule(sched)
+            raw_rows.append(row)
+
+    # Expand parametric rows (ramp/accel/const) into per-DT entries
+    expanded = []
+    for row in raw_rows:
+        # Parse common fields
+        try:
+            start = float(row.get('start', 0.0))
+            end = float(row.get('end', start))
+        except Exception:
+            continue
+
+        mode = (row.get('mode') or '').strip().lower()
+        steer = float(row.get('steer', 0.0)) if row.get('steer') not in (None, '') else 0.0
+
+        if mode in ('ramp', 'accel'):
+            # parametric ramp: v0 and accel OR v0 and v1
+            v0 = float(row.get('v0', row.get('speed', 0.0)))
+            if row.get('accel') not in (None, ''):
+                accel = float(row.get('accel', 0.0))
+            elif row.get('v1') not in (None, ''):
+                v1 = float(row.get('v1'))
+                duration = max(1e-6, end - start)
+                accel = (v1 - v0) / duration
+            else:
+                accel = 0.0
+
+            # Number of DT steps
+            span = max(0.0, end - start)
+            if span <= 0:
+                continue
+            n_steps = int(math.ceil(span / DT))
+            for i in range(n_steps):
+                t0 = start + i * DT
+                t1 = min(end, t0 + DT)
+                speed = v0 + accel * (t0 - start)
+                expanded.append({'start': t0, 'end': t1, 'speed': speed, 'steer': steer})
+        else:
+            # Treat as constant-speed entry (old format)
+            speed = float(row.get('speed', 0.0)) if row.get('speed') not in (None, '') else 0.0
+            # Keep as a single interval (the matching logic uses interval membership)
+            expanded.append({'start': start, 'end': end, 'speed': speed, 'steer': steer})
+
+    set_external_schedule(expanded)
 
 
 def compute_kinematics(state, speed, steer_rad, wheelbase):
