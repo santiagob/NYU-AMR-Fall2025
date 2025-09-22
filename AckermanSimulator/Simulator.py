@@ -5,8 +5,8 @@ import math
 
 # --- Vehicle Parameters ---
 WHEELBASE = 2.5  # meters (L)
-TRACK_WIDTH = 1.5  # meters (T)
-MAX_STEER_ANGLE_DEG = 35  # degrees
+TRACK_WIDTH = 1.5  # meters (W)
+MAX_STEER_ANGLE_DEG = 60  # degrees
 
 
 def compute_kinematics(state, speed, steer_rad, wheelbase):
@@ -85,7 +85,7 @@ class Vehicle:
     Represents an Ackermann steering vehicle with its state and kinematics.
     The state (x, y, yaw) refers to the center of the rear axle.
     """
-    def __init__(self, x, y, yaw, speed, wheelbase, track_width, max_steer_angle_rad):
+    def __init__(self, x, y, yaw, speed, wheelbase, track_width, max_steer_angle_rad, wheel_length=0.6, wheel_width=0.5):
         self.x = x  # x-position (center of rear axle)
         self.y = y  # y-position (center of rear axle)
         self.yaw = yaw  # yaw angle (radians, heading of the vehicle)
@@ -96,13 +96,14 @@ class Vehicle:
         self.max_steer_angle_rad = max_steer_angle_rad
 
         # For visualization: define vehicle body and wheel dimensions
-        self.body_length = wheelbase + 0.8  # Total length including overhangs
-        self.body_width = track_width + 0.2  # Total width including fenders
-        self.rear_overhang = 0.3
+        self.body_length = wheelbase + 2* wheel_length  # Total length including overhangs
+        self.body_width = track_width + wheel_width  # Total width including fenders
+        self.rear_overhang = wheel_length
         self.front_overhang = self.body_length - self.wheelbase - self.rear_overhang
 
-        self.wheel_length = 0.4
-        self.wheel_width = 0.2
+        self.wheel_length = wheel_length
+
+        self.wheel_width = wheel_width
 
     def update(self, dt, target_speed, target_steer_angle_deg):
         """Update the vehicle state using the (refactored) kinematic helpers.
@@ -154,9 +155,9 @@ class Vehicle:
         # (x_local, y_local)
         vertices_local = np.array([
             [-self.rear_overhang, half_width],         # Rear-left
-            [-self.rear_overhang, -half_width],        # Rear-right
-            [self.wheelbase + self.front_overhang, -half_width], # Front-right
             [self.wheelbase + self.front_overhang, half_width],  # Front-left
+            [self.wheelbase + self.front_overhang, -half_width], # Front-right
+            [-self.rear_overhang, -half_width],        # Rear-right
             [-self.rear_overhang, half_width]          # Close the rectangle
         ])
 
