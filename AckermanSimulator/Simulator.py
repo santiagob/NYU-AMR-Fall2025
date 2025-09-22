@@ -8,6 +8,46 @@ WHEELBASE = 2.5  # meters (L)
 TRACK_WIDTH = 1.5  # meters (W)
 MAX_STEER_ANGLE_DEG = 60  # degrees
 
+# External control schedule (list of dicts with keys: start, end, speed, steer)
+# Example: [{'start':0.0,'end':3.0,'speed':2.0,'steer':10.0}, ...]
+external_schedule = []
+external_enabled = False
+
+def set_external_schedule(schedule):
+    """Set the external schedule programmatically.
+
+    `schedule` should be a list of dicts with numeric keys: `start`, `end`,
+    `speed`, `steer` (degrees). Times are in seconds.
+    """
+    global external_schedule, external_enabled
+    external_schedule = list(schedule)
+    external_enabled = bool(external_schedule)
+
+def clear_external_schedule():
+    """Clear any external schedule and disable external control."""
+    global external_schedule, external_enabled
+    external_schedule = []
+    external_enabled = False
+
+def load_schedule_from_csv(path):
+    """Load an external schedule from a CSV file.
+
+    CSV columns (header optional): start,end,speed,steer
+    Times in seconds, steer in degrees.
+    """
+    import csv
+    sched = []
+    with open(path, newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            sched.append({
+                'start': float(row['start']),
+                'end': float(row['end']),
+                'speed': float(row['speed']),
+                'steer': float(row['steer'])
+            })
+    set_external_schedule(sched)
+
 
 def compute_kinematics(state, speed, steer_rad, wheelbase):
     """Compute instantaneous kinematic derivatives for the bicycle model.
@@ -40,9 +80,6 @@ def compute_kinematics(state, speed, steer_rad, wheelbase):
 
 def propagate_state(state, speed, steer_deg, dt, wheelbase):
     """Propagate the vehicle state for one time step using simple Euler integration.
-
-    This function is provided as the callable API requested: input control
-    variables (speed, steer_deg) and output the new kinematic state.
 
     Args:
         state (tuple): (x, y, yaw) current state.
@@ -313,6 +350,10 @@ def main():
             paused = not paused
         elif key == 'r':
             reset_sim()
+        elif key == 'e':
+            # toggle external schedule
+            global external_enabled
+            external_enabled = not external_enabled
         elif key == 's':
             # stop quickly
             held_keys.discard('up')
@@ -343,6 +384,8 @@ def main():
     
     # Text elements for dynamic title/info
     current_title = ax.set_title('')
+    # On-screen status text for external schedule
+    schedule_status_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, va='top')
 
     ax.legend()
 
@@ -377,6 +420,22 @@ def main():
                 current_steer_cmd += STEER_INC_PER_SEC * DT
             if 'right' in held_keys:
                 current_steer_cmd -= STEER_INC_PER_SEC * DT
+
+            # If an external schedule is enabled and has an entry for current time,
+            # override keyboard commands with scheduled values.
+            if external_enabled and external_schedule:
+                t = (len(x_history) - 1) * DT
+                # Find first schedule entry that covers current time
+                matched = None
+                for entry in external_schedule:
+                    if entry['start'] <= t < entry['end']:
+                        matched = entry
+                        break
+                if matched is not None:
+                    scheduled_speed = matched.get('speed', current_speed_cmd)
+                    scheduled_steer = matched.get('steer', current_steer_cmd)
+                    current_speed_cmd = scheduled_speed
+                    current_steer_cmd = scheduled_steer
 
             # Limit steer command to allowed range
             current_steer_cmd = max(-MAX_STEER_ANGLE_DEG, min(MAX_STEER_ANGLE_DEG, current_steer_cmd))
@@ -417,6 +476,22 @@ def main():
         current_speed = speed_history[idx]
         current_title.set_text(f'Ackermann Steering Vehicle Simulation (Time: {current_time:.1f} s, Speed: {current_speed:.2f} m/s)')
 
+        # Update schedule status overlay
+        if external_enabled and external_schedule:
+            # Find active entry
+            active = None
+            t = (len(x_history) - 1) * DT
+            for entry in external_schedule:
+                if entry['start'] <= t < entry['end']:
+                    active = entry
+                    break
+            if active is not None:
+                schedule_status_text.set_text(f'Schedule: ON  | [{active["start"]:.1f},{active["end"]:.1f}]s speed={active["speed"]}m/s steer={active["steer"]}deg')
+            else:
+                schedule_status_text.set_text('Schedule: ON  | no active entry')
+        else:
+            schedule_status_text.set_text('Schedule: OFF')
+
         # Adjust plot limits to follow the car
         margin = 10 # meters, defines the visible area around the car
         ax.set_xlim(x_history[idx] - margin, x_history[idx] + margin)
@@ -437,4 +512,21 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Ackermann simulator (interactive)')
+    parser.add_argument('--schedule', '-s', help='Path to schedule CSV to load at startup')
+    parser.add_argument('--enable', action='store_true', help='Enable loaded schedule immediately')
+    args = parser.parse_args()
+
+    if args.schedule:
+        try:
+            load_schedule_from_csv(args.schedule)
+            print(f'Loaded schedule from {args.schedule}')
+        except Exception as e:
+            print(f'Failed to load schedule from {args.schedule}: {e}')
+
+    if args.enable:
+        external_enabled = True
+
     main()
