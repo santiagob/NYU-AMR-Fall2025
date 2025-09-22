@@ -75,6 +75,11 @@ def load_schedule_from_csv(path):
             for i in range(n_steps):
                 t0 = start + i * DT
                 t1 = min(end, t0 + DT)
+                # Round boundaries to avoid tiny floating-point gaps between
+                # adjacent intervals (these gaps can cause a ``None`` match
+                # when searching for the interval that contains a time t).
+                t0 = round(t0, 10)
+                t1 = round(t1, 10)
                 speed = v0 + accel * (t0 - start)
                 expanded.append({'start': t0, 'end': t1, 'speed': speed, 'steer': steer})
         else:
@@ -146,6 +151,215 @@ def propagate_state(state, speed, steer_deg, dt, wheelbase):
     yaw_new = math.atan2(math.sin(yaw_new), math.cos(yaw_new))
 
     return x_new, y_new, yaw_new, steer_rad
+
+
+def batch_simulate(schedule=None, duration=None):
+    """Run a deterministic simulation from INITIAL_STATE using the provided
+    external schedule (list of dicts). Returns a dict of histories.
+
+    If `duration` is None and schedule is provided, use the max `end` time
+    found in the schedule. Otherwise use `SIM_DURATION`.
+    """
+    # Initialize vehicle for batch run
+    vehicle = Vehicle(
+        x=INITIAL_STATE[0], y=INITIAL_STATE[1], yaw=INITIAL_STATE[2],
+        speed=INITIAL_SPEED, wheelbase=WHEELBASE, track_width=TRACK_WIDTH,
+        max_steer_angle_rad=np.radians(MAX_STEER_ANGLE_DEG)
+    )
+
+    sched = schedule if schedule is not None else external_schedule
+
+    if duration is None:
+        if sched:
+            duration = max((entry.get('end', 0.0) for entry in sched), default=SIM_DURATION)
+        else:
+            duration = SIM_DURATION
+
+    num_steps = int(math.ceil(duration / DT))
+
+    times = []
+    xs = []
+    ys = []
+    yaws = []
+    speeds = []
+    steers = []
+    yaw_rates = []
+    lat_accels = []
+
+    state = (vehicle.x, vehicle.y, vehicle.yaw)
+
+    for i in range(num_steps):
+        t = i * DT
+        # Find scheduled entry for this time
+        scheduled = None
+        if sched:
+            for entry in sched:
+                if entry['start'] <= t < entry['end']:
+                    scheduled = entry
+                    break
+
+        if scheduled is not None:
+            target_speed = scheduled.get('speed', 0.0)
+            target_steer = scheduled.get('steer', 0.0)
+        else:
+            target_speed = 0.0
+            target_steer = 0.0
+
+        # Propagate
+        x_new, y_new, yaw_new, used_steer_rad = propagate_state(state, target_speed, target_steer, DT, WHEELBASE)
+
+        # Compute derived dynamics
+        # yaw_rate r and lateral acceleration a_y = v * r
+        if abs(WHEELBASE) > 1e-6:
+            r = (target_speed / WHEELBASE) * math.tan(used_steer_rad)
+        else:
+            r = 0.0
+        ay = target_speed * r
+
+        # Save
+        times.append(t)
+        xs.append(x_new)
+        ys.append(y_new)
+        yaws.append(yaw_new)
+        speeds.append(target_speed)
+        steers.append(math.degrees(used_steer_rad))
+        yaw_rates.append(r)
+        lat_accels.append(ay)
+
+        # Update state for next step
+        state = (x_new, y_new, yaw_new)
+
+    return {
+        't': np.array(times),
+        'x': np.array(xs),
+        'y': np.array(ys),
+        'yaw': np.array(yaws),
+        'speed': np.array(speeds),
+        'steer': np.array(steers),
+        'yaw_rate': np.array(yaw_rates),
+        'lat_accel': np.array(lat_accels),
+    }
+
+
+def export_simulation_image(path, histories, show_car=False):
+    """Create a multi-panel figure from histories and save to `path`.
+
+    Panels: aerial trajectory (left), speed/steer/yaw_rate/lat_accel vs time (right).
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    t = histories['t']
+
+    fig = plt.figure(figsize=(12, 6))
+    gs = GridSpec(2, 3, figure=fig)
+
+    # Aerial trajectory spans left two rows
+    ax0 = fig.add_subplot(gs[:, :2])
+    ax0.plot(histories['x'], histories['y'], '-b')
+    ax0.scatter(histories['x'][0], histories['y'][0], c='g', label='start')
+    ax0.scatter(histories['x'][-1], histories['y'][-1], c='r', label='end')
+    ax0.set_aspect('equal')
+    ax0.set_xlabel('X [m]')
+    ax0.set_ylabel('Y [m]')
+    ax0.set_title('Aerial Trajectory')
+    ax0.legend()
+
+    # Right column: four stacked plots
+    ax1 = fig.add_subplot(gs[0, 2])
+    ax1.plot(t, histories['speed'], '-k')
+    ax1.set_ylabel('Speed [m/s]')
+    ax1.set_title('Speed')
+
+    ax2 = fig.add_subplot(gs[1, 2])
+    ax2.plot(t, histories['steer'], '-r')
+    ax2.set_ylabel('Steer [deg]')
+    ax2.set_xlabel('Time [s]')
+    ax2.set_title('Steering')
+
+    # Small subplots below the aerial (in the middle column)
+    ax3 = fig.add_subplot(gs[0, 1])
+    ax3.plot(t, histories['yaw_rate'], '-m')
+    ax3.set_title('Yaw Rate [rad/s]')
+    ax3.set_xlabel('Time [s]')
+
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.plot(t, histories['lat_accel'], '-c')
+    ax4.set_title('Lateral Acceleration [m/s^2]')
+    ax4.set_xlabel('Time [s]')
+
+    plt.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def export_simulation_images(path, histories, show_car=False):
+    """Save two images: aerial trajectory and dynamics row.
+
+    `path` is a base path; function will write `<base>_trajectory.png` and
+    `<base>_dynamics.png` (keeps extension-agnostic behavior).
+    """
+    import os
+    base, _ = os.path.splitext(path)
+
+    # Trajectory image
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig1, ax = plt.subplots(figsize=(8, 8))
+    ax.plot(histories['x'], histories['y'], '-b')
+    ax.scatter(histories['x'][0], histories['y'][0], c='g', label='start')
+    ax.scatter(histories['x'][-1], histories['y'][-1], c='r', label='end')
+    ax.set_aspect('equal')
+    ax.set_xlabel('X [m]')
+    ax.set_ylabel('Y [m]')
+    ax.set_title('Aerial Trajectory')
+    ax.legend()
+    fig1.tight_layout()
+    traj_path = f"{base}_trajectory.png"
+    fig1.savefig(traj_path, dpi=200)
+    plt.close(fig1)
+
+    # Dynamics row: speed, steer, yaw_rate, lat_accel, yaw (degrees)
+    fig2, axes = plt.subplots(5, 1, figsize=(10, 15), sharex=True)
+    t = histories['t']
+    axes[0].plot(t, histories['speed'], '-k')
+    axes[0].set_title('Speed [m/s]')
+    axes[1].plot(t, histories['steer'], '-r')
+    axes[1].set_title('Steer [deg]')
+    axes[2].plot(t, histories['yaw_rate'], '-m')
+    axes[2].set_title('Yaw Rate [rad/s]')
+    axes[3].plot(t, histories['lat_accel'], '-c')
+    axes[3].set_title('Lateral Accel [m/s^2]')
+    # Yaw angle (convert to degrees for easier reading)
+    yaw_deg = np.degrees(histories['yaw'])
+    axes[4].plot(t, yaw_deg, '-g')
+    axes[4].set_title('Yaw [deg]')
+    for axx in axes:
+        axx.set_xlabel('Time [s]')
+    fig2.tight_layout()
+    dyn_path = f"{base}_dynamics.png"
+    fig2.savefig(dyn_path, dpi=200)
+    plt.close(fig2)
+
+    return traj_path, dyn_path
+
+
+def save_histories_csv(path, histories):
+    import os, csv
+    base, _ = os.path.splitext(path)
+    csv_path = f"{base}_history.csv"
+    keys = ['t', 'x', 'y', 'yaw', 'speed', 'steer', 'yaw_rate', 'lat_accel']
+    with open(csv_path, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(keys)
+        n = len(histories['t'])
+        for i in range(n):
+            w.writerow([histories[k][i] for k in keys])
+    return csv_path
 
 # --- Simulation Parameters ---
 SIM_DURATION = 15  # seconds
@@ -554,6 +768,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Ackermann simulator (interactive)')
     parser.add_argument('--schedule', '-s', help='Path to schedule CSV to load at startup')
     parser.add_argument('--enable', action='store_true', help='Enable loaded schedule immediately')
+    parser.add_argument('--export', '-x', help='Export simulation image to PATH (runs headless)')
+    parser.add_argument('--duration', type=float, help='Duration (s) to use for export run (overrides schedule end)')
     args = parser.parse_args()
 
     if args.schedule:
@@ -566,4 +782,14 @@ if __name__ == "__main__":
     if args.enable:
         external_enabled = True
 
-    main()
+    # If export requested, run batch simulation and exit
+    if args.export:
+        # If a schedule was loaded above, use external_schedule; otherwise None
+        histories = batch_simulate(schedule=external_schedule if external_schedule else None, duration=args.duration)
+        traj_path, dyn_path = export_simulation_images(args.export, histories)
+        print(f'Exported trajectory to {traj_path}')
+        print(f'Exported dynamics to {dyn_path}')
+        csv_path = save_histories_csv(args.export, histories)
+        print(f'Exported histories CSV to {csv_path}')
+    else:
+        main()
