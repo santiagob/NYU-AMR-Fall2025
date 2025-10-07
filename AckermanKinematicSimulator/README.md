@@ -1,4 +1,4 @@
-# Ackermann Simulator
+# Ackermann Kinematic Simulator
 
 Quick reference for the updated CLI and scheduling workflow used by this simulator.
 
