@@ -1,2 +1,3 @@
 AckermanKinematicSimulator/output
 AckermanDynamicsSimulator/output
+*.pyc

@@ -67,11 +67,12 @@ class DynamicBicycleModel:
         else:
             Fx = throttle * p.BRAKE_FORCE_COEFF * p.MASS * 9.81
 
-        # Resistances
+        # Resistances (always oppose motion)
         Fdrag = 0.5 * p.AIR_DENSITY * p.DRAG_COEFF * p.FRONTAL_AREA * speed**2
         Froll = p.ROLL_RESIST * p.MASS * 9.81
-        drag_dir = -1 if vx > 0 else 1
-        Fx_net = Fx + (drag_dir * (Fdrag + Froll))
+        # Drag opposes velocity direction
+        drag_dir = -vx / (speed + EPS)  # Normalized direction opposite to motion
+        Fx_net = Fx + drag_dir * (Fdrag + Froll)
 
         # 4. Equations of Motion (Newton-Euler)
         dx = vx * np.cos(yaw) - vy * np.sin(yaw)

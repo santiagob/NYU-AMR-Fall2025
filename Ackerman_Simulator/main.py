@@ -44,48 +44,64 @@ def main():
     
     # --- 3. SIMULATION LOOP ---
     vehicle = DynamicBicycleModel(x=sx, y=sy, yaw=np.radians(45))
-    stanley = StanleyController(k_gain=2.5) # Tune this for slides!
-    speed_pid = PIDController(Kp=1.0)
+    # Reduced k_gain for stability with dynamic model, increased k_soft for low-speed handling
+    stanley = StanleyController(k_gain=0.8, k_soft=2.0)
+    # Reduced PID gains for smoother speed control
+    speed_pid = PIDController(Kp=0.5, Ki=0.05, Kd=0.1)
     
-    # History for plotting
-    hx, hy, hv, hsteer, hcte = [], [], [], [], []
+    # History for plotting (added hyaw for animation)
+    hx, hy, hv, hsteer, hcte, hyaw = [], [], [], [], [], []
     
     target_speed = 5.0 # m/s
     dt = 0.1
     max_time = 50.0
     
+    # Lookahead parameters for path following
     idx = 0 # Current path index
+    lookahead_distance = 3.0  # meters - advance target point ahead of vehicle
     
     print("Starting Control Loop...")
     for t in np.arange(0, max_time, dt):
-        # A. Find nearest point on path for Stanley
-        # Simple search for closest index
+        # A. Find nearest point on path (for reference)
         dists = np.hypot(vehicle.state[0] - path_x, vehicle.state[1] - path_y)
-        idx = np.argmin(dists)
+        nearest_idx = np.argmin(dists)
         
-        # Stop if near goal
+        # B. Lookahead: Find target point ahead on path
+        # Start from nearest point and search forward for lookahead distance
+        idx = nearest_idx
+        for i in range(nearest_idx, len(path_x)):
+            dist_to_point = np.hypot(vehicle.state[0] - path_x[i], 
+                                     vehicle.state[1] - path_y[i])
+            if dist_to_point >= lookahead_distance:
+                idx = i
+                break
+        # Ensure we don't go past the end
+        idx = min(idx, len(path_x) - 1)
+        
+        # C. Check if goal reached
         dist_to_goal = np.hypot(vehicle.state[0] - gx, vehicle.state[1] - gy)
         if dist_to_goal < 2.0:
-            print("Goal Reached!")
+            print(f"Goal Reached at t={t:.1f}s!")
             break
 
-        # B. Compute Control
+        # D. Compute Control using Stanley controller
         steer_cmd, cte = stanley.compute(vehicle.state, path_x, path_y, idx)
         
-        # Clamp Steering
+        # E. Clamp Steering to vehicle limits
         steer_cmd = np.clip(steer_cmd, -VehicleParams.MAX_STEER, VehicleParams.MAX_STEER)
         
-        # Speed Control
+        # F. Speed Control with PID
         current_speed = np.hypot(vehicle.state[3], vehicle.state[4])
         throttle = speed_pid.compute(target_speed, current_speed, dt)
         throttle = np.clip(throttle, -1.0, 1.0)
         
-        # C. Update Dynamics
+        # G. Update Vehicle Dynamics
         vehicle.update(throttle, steer_cmd, dt)
         
-        # D. Save History
+        # H. Save History for plotting and analysis
         hx.append(vehicle.state[0])
         hy.append(vehicle.state[1])
+        hyaw.append(vehicle.state[2])  # Added for animation
         hv.append(current_speed)
         hsteer.append(steer_cmd)
         hcte.append(cte)
@@ -132,12 +148,7 @@ def main():
     plotter.plot_results(path_x, path_y, hx, hy, hsteer, hcte, hv)
     
     # 2. Run Animation (For your "System Modeling" or Demo Slide)
-    # Pass 'hyaw' (heading) history if you saved it. 
-    # If you didn't save hyaw in the loop, make sure to append it: hyaw.append(vehicle.state[2])
-    
-    # Ensure you collected 'hyaw' in the simulation loop above!
-    # hx, hy, hv, hsteer, hcte, hyaw = [], [], [], [], [], [] <-- Add hyaw here
-    
+    # Uncomment to see the animated vehicle following the path
     # plotter.animate_run(path_x, path_y, hx, hy, hyaw, hsteer)
 
 if __name__ == "__main__":

@@ -7,54 +7,65 @@ class StanleyController:
 
     def compute(self, vehicle_state, path_x, path_y, target_idx):
         """
-        Calculates steering angle.
+        Calculates steering angle using Stanley method.
+        Stanley method: delta = theta_e + arctan(k * e / v)
+        where theta_e is heading error and e is cross-track error
         """
         x = vehicle_state[0]
         y = vehicle_state[1]
         yaw = vehicle_state[2]
-        v = vehicle_state[3] # Longitudinal velocity
+        v = vehicle_state[3]  # Longitudinal velocity
 
-        # 1. Calculate Heading Error (Theta_e)
-        # Find tangent of path at target index
-        if target_idx < len(path_x) - 1:
-            dx = path_x[target_idx+1] - path_x[target_idx]
-            dy = path_y[target_idx+1] - path_y[target_idx]
+        # Import vehicle parameters
+        from models.vehicle_dynamics import VehicleParams
+        
+        # Calculate front axle position (Stanley uses front axle reference point)
+        front_axle_x = x + VehicleParams.CG_TO_FRONT * np.cos(yaw)
+        front_axle_y = y + VehicleParams.CG_TO_FRONT * np.sin(yaw)
+
+        # 1. Find the nearest path point to the front axle
+        # This ensures we're measuring error from the closest point on path
+        distances = np.hypot(front_axle_x - path_x, front_axle_y - path_y)
+        nearest_idx = np.argmin(distances)
+        
+        # Use nearest point for cross-track error, but target_idx for heading
+        # This prevents the error from growing when looking ahead
+
+        # 2. Calculate path heading at nearest point
+        if nearest_idx < len(path_x) - 1:
+            dx = path_x[nearest_idx + 1] - path_x[nearest_idx]
+            dy = path_y[nearest_idx + 1] - path_y[nearest_idx]
         else:
-            dx = path_x[target_idx] - path_x[target_idx-1]
-            dy = path_y[target_idx] - path_y[target_idx-1]
+            dx = path_x[nearest_idx] - path_x[nearest_idx - 1]
+            dy = path_y[nearest_idx] - path_y[nearest_idx - 1]
         
         path_yaw = np.arctan2(dy, dx)
+        
+        # 3. Calculate heading error (theta_e)
         heading_error = path_yaw - yaw
-
-        # Normalize angle to [-pi, pi]
+        # Normalize to [-pi, pi]
         heading_error = np.arctan2(np.sin(heading_error), np.cos(heading_error))
 
-        # 2. Calculate Cross-Track Error (e)
-        # Distance from front axle to path
-        # Note: Stanley is defined for the Front Axle
-        front_axle_x = x + 1.2 * np.cos(yaw) # 1.2 is CG_TO_FRONT
-        front_axle_y = y + 1.2 * np.sin(yaw)
+        # 4. Calculate cross-track error (e)
+        # Vector from nearest path point to front axle
+        dx_error = front_axle_x - path_x[nearest_idx]
+        dy_error = front_axle_y - path_y[nearest_idx]
         
-        # Calculate distance to closest point on line defined by target_idx
-        # (Simplified: Just taking distance to the target point)
-        # For better accuracy in presentation, we project vector onto path normal
-        dx_f = front_axle_x - path_x[target_idx]
-        dy_f = front_axle_y - path_y[target_idx]
-        
-        # Determine sign of error (left or right of path)
-        # We use the cross product of path vector and vehicle vector
-        cross_track_error = np.hypot(dx_f, dy_f)
-        perp_vec = [np.sin(path_yaw), -np.cos(path_yaw)]
-        dot_prod = dx_f * perp_vec[0] + dy_f * perp_vec[1]
-        
-        if dot_prod > 0:
-            cross_track_error = -cross_track_error
+        # Project error onto path normal (perpendicular to path direction)
+        # Positive error = vehicle is to the left of path
+        # Use cross product to determine sign: (path_vec) x (error_vec)
+        cross_track_error = dx * dy_error - dy * dx_error
+        # Normalize by path segment length to get signed distance
+        path_length = np.hypot(dx, dy)
+        if path_length > 1e-6:
+            cross_track_error = cross_track_error / path_length
 
-        # 3. Stanley Control Law
-        # delta = heading_error + arctan( k * e / (v + k_soft) )
-        cross_track_steering = np.arctan2(self.k * cross_track_error, (abs(v) + self.k_soft))
+        # 5. Stanley control law
+        # delta = theta_e + arctan(k * e / (v + k_soft))
+        cross_track_term = np.arctan2(self.k * cross_track_error, (abs(v) + self.k_soft))
         
-        steer_cmd = heading_error + cross_track_steering
+        steer_cmd = heading_error + cross_track_term
+        
         return steer_cmd, cross_track_error
 
 class PIDController:
