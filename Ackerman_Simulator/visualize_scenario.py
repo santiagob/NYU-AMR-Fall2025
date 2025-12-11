@@ -13,6 +13,8 @@ from models.model_factory import create_vehicle, get_vehicle_params
 from models.vehicle_dynamics import DynamicBicycleModel, VehicleParams
 from planners.a_star import AStarPlanner
 from controllers.stanley import StanleyController, PIDController
+from controllers.lqr import LQRController
+from controllers.pure_pursuit import PurePursuitController
 
 # Vehicle visualization parameters (matching Simulator.py)
 WHEEL_LENGTH = 0.6
@@ -87,7 +89,7 @@ def get_wheel_vertices(x, y, yaw, steer_angle_rad, wheelbase, track_width):
 def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed, 
                               grid_size, robot_radius, output_file='scenario_animation.mp4',
                               use_smoothing=False, model_type='kinematic', compare_models=False,
-                              fast_mode=False):
+                              fast_mode=False, controller_type='stanley'):
     """
     Create animated video of vehicle navigating through scenario
     
@@ -105,7 +107,7 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     """
     print(f"\n{'='*60}")
     print(f"Creating animation for: {scenario_name}")
-    print(f"Model: {model_type.upper()} (fast_mode={fast_mode})")
+    print(f"Model: {model_type.upper()} (fast_mode={fast_mode}, controller={controller_type})")
     if compare_models or model_type == 'both':
         print(f"Mode: COMPARISON (Kinematic vs Dynamic)")
     print(f"{'='*60}")
@@ -153,6 +155,9 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     for m_type in models_to_use:
         vehicles[m_type] = create_vehicle(m_type, x=sx, y=sy, yaw=initial_yaw)
     
+    # Simulation step
+    dt = 0.1
+
     # Model-specific controller tuning to keep kinematic model stable
     control_tuning = {
         'kinematic': {
@@ -181,6 +186,11 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
             k_soft=control_tuning[m_type]['stanley_soft']
         ) for m_type in models_to_use
     }
+    lqr_controllers = {m_type: LQRController(dt=dt) for m_type in models_to_use}
+    pp_controllers = {m_type: PurePursuitController(lookahead_base=control_tuning[m_type]['lookahead_base'],
+                                                   lookahead_gain=control_tuning[m_type]['lookahead_gain'],
+                                                   min_lookahead=1.5, max_lookahead=8.0)
+                     for m_type in models_to_use}
     speed_pids = {
         m_type: PIDController(*control_tuning[m_type]['speed_pid'])
         for m_type in models_to_use
@@ -188,7 +198,6 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     prev_steers = {m_type: 0.0 for m_type in models_to_use}
     
     # Simulation
-    dt = 0.1
     max_time = 60.0  # Limit animation length
     waypoint_tolerance = 2.5
 
@@ -231,7 +240,12 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
             params = get_vehicle_params(m_type)
             
             # Control
-            steer, cte = stanley_controllers[m_type].compute([vehicle.x, vehicle.y, vehicle.yaw, vehicle.vx], path_x, path_y, idx)
+            if controller_type == 'lqr':
+                steer, cte = lqr_controllers[m_type].compute([vehicle.x, vehicle.y, vehicle.yaw, vehicle.vx, vehicle.vy, vehicle.r], path_x, path_y, idx)
+            elif controller_type == 'pure_pursuit':
+                steer, cte = pp_controllers[m_type].compute([vehicle.x, vehicle.y, vehicle.yaw, vehicle.vx], path_x, path_y, idx)
+            else:
+                steer, cte = stanley_controllers[m_type].compute([vehicle.x, vehicle.y, vehicle.yaw, vehicle.vx], path_x, path_y, idx)
             steer = np.clip(steer, -params.MAX_STEER, params.MAX_STEER)
 
             # Steering rate limiting for stability (especially kinematic model)
@@ -522,6 +536,9 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='kinematic', 
                        choices=['kinematic', 'dynamic', 'both'],
                        help='Vehicle model to use: kinematic, dynamic, or both (default: kinematic)')
+    parser.add_argument('--controller', type=str, default='stanley', choices=['stanley', 'lqr', 'pure_pursuit'],
+                       help='Path-tracking controller to use (default: stanley)')
+    parser.add_argument('--fast', action='store_true', help='Enable fast_mode (skip frames, lower FPS)')
     args = parser.parse_args()
     
     # Model selection
@@ -533,6 +550,9 @@ if __name__ == "__main__":
         print("  → Running COMPARISON mode (kinematic vs dynamic side-by-side)")
     else:
         print(f"  → Running SINGLE model: {model_type}")
+    print(f"Controller: {args.controller}")
+    if args.fast:
+        print("Fast mode: ENABLED")
     
     # Example scenarios to visualize
     scenarios = [
@@ -584,7 +604,9 @@ if __name__ == "__main__":
         robot_radius,
         scenario['output'],
         model_type=model_type,
-        compare_models=compare
+        compare_models=compare,
+        fast_mode=args.fast,
+        controller_type=args.controller
     )
     
     print("\n" + "="*60)
