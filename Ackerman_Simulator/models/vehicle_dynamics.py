@@ -83,3 +83,28 @@ class DynamicBicycleModel:
         dr  = (p.CG_TO_FRONT * Fyf * np.cos(steer) - p.CG_TO_REAR * Fyr) / p.YAW_INERTIA
 
         return np.array([dx, dy, dyaw, dvx, dvy, dr])
+
+    # Properties for unified interface with kinematic model
+    @property
+    def x(self):
+        return self.state[0]
+
+    @property
+    def y(self):
+        return self.state[1]
+
+    @property
+    def yaw(self):
+        return self.state[2]
+
+    @property
+    def vx(self):
+        return self.state[3]
+
+    @property
+    def vy(self):
+        return self.state[4]
+
+    @property
+    def r(self):
+        return self.state[5]

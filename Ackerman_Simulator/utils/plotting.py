@@ -21,7 +21,7 @@ class Plotter:
 
         # --- Subplot 1: Trajectory (Map) ---
         plt.subplot(2, 2, 1)
-        plt.plot(self.ox, self.oy, ".k", label="Obstacles")
+        plt.plot(self.ox, self.oy, ".k", markersize=2, label="Obstacles")
         plt.plot(path_x, path_y, "--r", label="Planned Path (A*)")
         plt.plot(hx, hy, "-b", label="Actual Path (Dynamic)", linewidth=2)
         plt.title("Motion Planning & Trajectory Tracking")
@@ -70,7 +70,7 @@ class Plotter:
         ax.grid(True)
         
         # Plot static background
-        ax.plot(self.ox, self.oy, ".k", label="Obstacles")
+        ax.plot(self.ox, self.oy, ".k", markersize=2, label="Obstacles")
         ax.plot(path_x, path_y, "--r", label="Planned Path")
         
         # Dynamic elements

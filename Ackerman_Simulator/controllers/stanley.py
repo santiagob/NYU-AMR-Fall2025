@@ -1,15 +1,19 @@
 import numpy as np
 
 class StanleyController:
-    def __init__(self, k_gain=0.5, k_soft=1.0):
+    def __init__(self, k_gain=0.5, k_soft=1.0, error_recovery=True):
         self.k = k_gain      # Control gain (determines how aggressive it corrects error)
         self.k_soft = k_soft # Softening parameter to prevent division by zero at low speed
+        self.error_recovery = error_recovery  # Enable aggressive recovery when far from path
 
     def compute(self, vehicle_state, path_x, path_y, target_idx):
         """
         Calculates steering angle using Stanley method.
         Stanley method: delta = theta_e + arctan(k * e / v)
         where theta_e is heading error and e is cross-track error
+        
+        Enhanced with error recovery: When cross-track error grows large,
+        increase steering gain to recover faster.
         """
         x = vehicle_state[0]
         y = vehicle_state[1]
@@ -60,9 +64,19 @@ class StanleyController:
         if path_length > 1e-6:
             cross_track_error = cross_track_error / path_length
 
-        # 5. Stanley control law
+        # 5. Adaptive gain based on error magnitude (error recovery)
+        # When far from path (|e| > 3m), increase k gain for faster recovery
+        k_adaptive = self.k
+        if self.error_recovery:
+            abs_error = abs(cross_track_error)
+            if abs_error > 3.0:
+                # Scale gain up to 2x for large errors
+                recovery_factor = 1.0 + (abs_error - 3.0) / 10.0
+                k_adaptive = self.k * np.clip(recovery_factor, 1.0, 2.0)
+
+        # 6. Stanley control law
         # delta = theta_e + arctan(k * e / (v + k_soft))
-        cross_track_term = np.arctan2(self.k * cross_track_error, (abs(v) + self.k_soft))
+        cross_track_term = np.arctan2(k_adaptive * cross_track_error, (abs(v) + self.k_soft))
         
         steer_cmd = heading_error + cross_track_term
         

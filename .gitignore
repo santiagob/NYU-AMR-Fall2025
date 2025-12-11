@@ -1,3 +1,7 @@
 AckermanKinematicSimulator/output
 AckermanDynamicsSimulator/output
 *.pyc
+*.mp4
+*.png
+*.gif
+__pycache__/

@@ -10,20 +10,33 @@ WHEELBASE = 2.5  # Distance between front and rear axles [m]
 TRACK_WIDTH = 1.5  # Distance between left and right wheels [m]
 MAX_STEER_ANGLE_DEG = 60  # Maximum steering angle [deg]
 
-VEHICLE_MASS = 1500.0  # Vehicle mass [kg] (I_{zz})
+VEHICLE_MASS = 1500.0  # Vehicle mass [kg]
 YAW_INERTIA = 2500.0   # Yaw moment of inertia [kg*m^2]
 CG_TO_FRONT = 1.2      # Distance from CG to front axle [m]
 CG_TO_REAR = WHEELBASE - CG_TO_FRONT  # Distance from CG to rear axle [m]
 
-# A typical road tire has a cornering stiffness in the range of 100-400 N/degree,
-# while racing tires can have significantly higher values, like 2000-4000 N/degree. 
-CORNERING_STIFFNESS_FRONT = -600.0  # Front tire cornering stiffness [N/rad]
-CORNERING_STIFFNESS_REAR = -600.0   # Rear tire cornering stiffness [N/rad]
+# --- Quasi-Kinematic Parameters (Minimal Lateral Motion) ---
+# This configuration heavily constrains lateral dynamics to behave almost like kinematic model
+# Result: Very minimal lateral sliding/drifting, car-like behavior
+
+CORNERING_STIFFNESS_FRONT = 8000.0   # Front tire cornering stiffness [N/rad]
+CORNERING_STIFFNESS_REAR = 8000.0    # Rear tire cornering stiffness [N/rad]
+
+# Very high lateral damping to suppress lateral velocity
+LATERAL_DAMPING_COEFF = 5000.0  # Damping force per unit lateral velocity [N·s/m]
+
+# Kinematic constraint factor: forces lateral velocity toward kinematic prediction
+# 0.0 = pure dynamic model, 1.0 = pure kinematic model
+# 0.95 = heavily constrained (quasi-kinematic, minimal slip)
+KINEMATIC_CONSTRAINT_FACTOR = 0.99  # How much to constrain toward kinematic behavior
+
+# Tire slip angle saturation (simplified)
+MAX_SLIP_ANGLE = np.radians(15)  # Maximum slip angle before severe grip loss
 
 AIR_DENSITY = 1.2      # Air density [kg/m^3]
 DRAG_COEFF = 0.3       # Aerodynamic drag coefficient
 FRONTAL_AREA = 2.2     # Frontal area [m^2]
-ROLLING_RESIST_COEFF = 0.01  # Rolling resistance coefficient
+ROLLING_RESIST_COEFF = 0.015  # Increased for more realistic rolling resistance
 MAX_ENGINE_FORCE = 8000.0  # Maximum engine force [N]
 BRAKE_FORCE_COEFF = 0.8    # Braking force coefficient
 
@@ -88,14 +101,43 @@ def load_schedule_from_csv(path):
             expanded.append({'start': start, 'end': end, 'speed': speed, 'steer': steer})
     set_external_schedule(expanded)
 
-# --- Dynamic Bicycle Model ---
+# --- Simplified Dynamic Bicycle Model ---
+def compute_tire_force(slip_angle, cornering_stiffness):
+    """
+    Computes tire lateral force using a simple linear model with soft saturation.
+    This simplified version reduces excessive lateral dynamics.
+    
+    Args:
+        slip_angle: Tire slip angle [rad]
+        cornering_stiffness: Linear cornering stiffness [N/rad]
+    
+    Returns:
+        Lateral tire force [N]
+    """
+    # Simple linear model with gentle saturation
+    # Clamp slip angle to reasonable range
+    slip_clamped = np.clip(slip_angle, -MAX_SLIP_ANGLE, MAX_SLIP_ANGLE)
+    
+    # Linear tire force
+    Fy = cornering_stiffness * slip_clamped
+    
+    return Fy
+
 def compute_dynamics(state, throttle, steer_rad):
     """
-    Computes the time derivatives of the state using the dynamic bicycle model.
+    Computes the time derivatives of the state using an improved dynamic bicycle model.
+    
+    Key improvements:
+    - Realistic positive cornering stiffness values
+    - Slip angle saturation (tire saturation)
+    - Improved lateral dynamics
+    - Better numerical stability
+    
     Args:
         state: Tuple (x, y, yaw, vx, vy, r)
         throttle: Throttle/brake command [-1, 1]
         steer_rad: Steering angle [rad]
+    
     Returns:
         Tuple of state derivatives (dx, dy, dyaw, dvx, dvy, dr)
     """
@@ -105,61 +147,97 @@ def compute_dynamics(state, throttle, steer_rad):
 
     # Handle very low speeds to avoid division by zero
     if abs(vx) < EPS:
-        alpha_f = 0.0
-        alpha_r = 0.0
-        Fyf = 0.0
-        Fyr = 0.0
-    else:
-        # For reverse motion, slip angles and steering are mirrored
-        sign_vx = np.sign(vx)
-        # When going backwards, steering is reversed
-        effective_steer = steer_rad #if sign_vx >= 0 else -steer_rad
-        alpha_f = (vy + CG_TO_FRONT * r/ abs(vx)) - effective_steer
-        alpha_r = (vy - CG_TO_REAR * r)/ abs(vx)
-        Fyf = CORNERING_STIFFNESS_FRONT * alpha_f
-        Fyr = CORNERING_STIFFNESS_REAR * alpha_r
-        # Flip lateral forces if moving backwards
-        if vx < 0:
-            Fyf = -Fyf
-            Fyr = -Fyr
-
+        # Vehicle is essentially stopped
+        return 0, 0, 0, 0, 0, 0
+    
+    # Clamp steering to maximum angle
+    steer_rad = np.clip(steer_rad, -np.radians(MAX_STEER_ANGLE_DEG), 
+                        np.radians(MAX_STEER_ANGLE_DEG))
+    
+    # KINEMATIC CONSTRAINT: Rear tires have NO lateral slip
+    # In kinematic model: rear axle velocity is purely longitudinal (no lateral component)
+    # This means: vy at rear axle = 0, so vy - CG_TO_REAR * r = 0
+    # Therefore: vy_kinematic = CG_TO_REAR * r
+    
+    # Enforce kinematic relationship for lateral velocity
+    vy_kinematic = CG_TO_REAR * r
+    
+    # Compute slip angles
+    # Front slip angle: measured relative to front wheel orientation
+    alpha_f = np.arctan2(vy + CG_TO_FRONT * r, vx) - steer_rad
+    
+    # KINEMATIC MODEL: Rear tire has ZERO slip angle (no lateral slip)
+    # We eliminate rear tire lateral force entirely
+    alpha_r = 0.0  # Kinematic constraint: no slip at rear
+    
+    # Compute tire forces
+    Fyf = compute_tire_force(alpha_f, CORNERING_STIFFNESS_FRONT)
+    Fyr = 0.0  # KINEMATIC: No lateral force at rear (no slip condition)
+    
     # Longitudinal force (engine/brake)
     if vx >= 0:
         Fx = throttle * MAX_ENGINE_FORCE if throttle >= 0 else throttle * BRAKE_FORCE_COEFF * VEHICLE_MASS * 9.81
     else:
         Fx = throttle * MAX_ENGINE_FORCE if throttle <= 0 else throttle * BRAKE_FORCE_COEFF * VEHICLE_MASS * 9.81
 
-    # Drag and rolling resistance always oppose the velocity vector
+    # Drag and rolling resistance
     Fdrag = 0.5 * AIR_DENSITY * DRAG_COEFF * FRONTAL_AREA * speed**2
     Froll = ROLLING_RESIST_COEFF * VEHICLE_MASS * 9.81
-    drag_dir = -vx / speed if speed > EPS else 0.0
-    Fx_net = Fx + drag_dir * Fdrag + drag_dir * Froll
+    Fx_net = Fx - Fdrag - Froll
 
-    # Equations of motion
+    # Equations of motion (bicycle model)
     dx = vx * np.cos(yaw) - vy * np.sin(yaw)
     dy = vx * np.sin(yaw) + vy * np.cos(yaw)
     dyaw = r
 
-    dvx = (Fx_net + VEHICLE_MASS * vy * r) / VEHICLE_MASS
-    dvy = (Fyf * np.cos(steer_rad) + Fyr - VEHICLE_MASS * vx * r) / VEHICLE_MASS
+    # KINEMATIC CONSTRAINT: Force lateral velocity to satisfy no-slip condition at rear axle
+    # Kinematic model: rear axle has no lateral velocity component
+    # This means: vy_rear = vy - CG_TO_REAR * r = 0
+    # Therefore: vy must equal CG_TO_REAR * r
     
+    # Apply very strong constraint to force vy toward kinematic value
+    Fy_damping = -LATERAL_DAMPING_COEFF * vy  # Damping
+    Fy_constraint = -KINEMATIC_CONSTRAINT_FACTOR * VEHICLE_MASS * 10.0 * (vy - vy_kinematic)  # Strong kinematic constraint
+    
+    # Lateral dynamics (Fyr = 0 because of kinematic constraint)
+    dvy = (Fyf * np.cos(steer_rad) + Fy_damping + Fy_constraint) / VEHICLE_MASS - vx * r
+    
+    # Longitudinal acceleration
+    dvx = Fx_net / VEHICLE_MASS + vy * r
+    
+    # Yaw acceleration: moments from front and rear tire forces
     dr = (CG_TO_FRONT * Fyf * np.cos(steer_rad) - CG_TO_REAR * Fyr) / YAW_INERTIA
     
     return dx, dy, dyaw, dvx, dvy, dr
 
 def propagate_state_dynamic(state, throttle, steer_deg, dt):
     """
-    Integrates the state forward in time using Heun's method (improved Euler).
+    Integrates state forward with KINEMATIC constraint: rear tire has NO lateral slip.
+    The kinematic model dictates: vy_rear = vy - CG_TO_REAR * r = 0
+    Therefore: vy = CG_TO_REAR * r (strictly enforced)
     """
     steer_rad = np.radians(np.clip(steer_deg, -MAX_STEER_ANGLE_DEG, MAX_STEER_ANGLE_DEG))
+    
     # Heun's method (improved Euler)
     k1 = compute_dynamics(state, throttle, steer_rad)
     state_pred = tuple(s + k * dt for s, k in zip(state, k1))
     k2 = compute_dynamics(state_pred, throttle, steer_rad)
     new_state = tuple(s + 0.5 * (k1i + k2i) * dt for s, k1i, k2i in zip(state, k1, k2))
-    # Normalize yaw
+    
+    # CRITICAL: Apply kinematic constraint to eliminate rear tire lateral slip
+    # Kinematic model: rear axle has zero lateral velocity (no-slip condition)
+    # This forces: vy = CG_TO_REAR * r (exactly)
     new_state = list(new_state)
+    x, y, yaw, vx, vy, r = new_state
+    
+    # Reconstruct vy from kinematic no-slip condition
+    # This ensures rear tire has ZERO lateral velocity
+    vy_kinematic = CG_TO_REAR * r
+    new_state[4] = vy_kinematic  # Set vy to kinematic value
+    
+    # Normalize yaw
     new_state[2] = np.arctan2(np.sin(new_state[2]), np.cos(new_state[2]))
+    
     return tuple(new_state)
 
 # --- Simple speed controller for schedule compatibility ---

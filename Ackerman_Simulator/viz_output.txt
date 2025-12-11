@@ -1,0 +1,24 @@
+
+============================================================
+  SCENARIO VISUALIZATION TOOL
+============================================================
+
+Available scenarios:
+  1. Simple Diagonal
+  2. Complex Maze
+
+Select scenario (1-2) or press Enter for default [1]: 
+============================================================
+Creating animation for: Simple Diagonal
+============================================================
+  Path planned: 48 points
+  Simulating trajectory...
+  ✓ Waypoint 1 reached at t=12.7s
+  ✓ Goal reached at t=12.7s
+  Trajectory complete: 127 frames
+  Generating animation...
+  ✓ Animation saved to: diagonal_animation.mp4
+
+============================================================
+  VISUALIZATION COMPLETE
+============================================================

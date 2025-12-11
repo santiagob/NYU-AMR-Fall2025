@@ -1,0 +1,22 @@
+
+============================================================
+  SCENARIO VISUALIZATION TOOL
+============================================================
+
+Available scenarios:
+  1. Simple Diagonal
+  2. Complex Maze
+
+Select scenario (1-2) or press Enter for default [1]: 
+============================================================
+Creating animation for: Complex Maze
+============================================================
+  Path planned: 59 points
+  Simulating trajectory...
+  Trajectory complete: 600 frames
+  Generating animation...
+  ✓ Animation saved to: maze_animation.mp4
+
+============================================================
+  VISUALIZATION COMPLETE
+============================================================
