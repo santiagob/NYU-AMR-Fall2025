@@ -522,7 +522,128 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
             print(f"  Displaying animation instead...")
             plt.show()
     
+    # Generate static analysis plots
+    print(f"  Generating analysis plots...")
+    generate_analysis_plots(scenario_name, models_to_use, histories, path_x, path_y, ox, oy, waypoints)
+    
     return anim
+
+
+def generate_analysis_plots(scenario_name, models_to_use, histories, path_x, path_y, ox, oy, waypoints):
+    """Generate static analysis plots comparing models (trajectory, metrics, performance radar)."""
+    n_models = len(models_to_use)
+    fig = plt.figure(figsize=(16, 12))
+    
+    # Plot 1: Trajectory comparison
+    ax1 = plt.subplot(2, 3, 1)
+    ax1.plot(ox, oy, '.k', markersize=1, alpha=0.6, label='Obstacles')
+    ax1.plot(path_x, path_y, '--r', linewidth=2, alpha=0.5, label='Planned Path')
+    colors = {'kinematic': 'blue', 'dynamic': 'red'}
+    for m_type in models_to_use:
+        ax1.plot(histories[m_type]['x'], histories[m_type]['y'], 
+                color=colors.get(m_type, 'black'), linewidth=2.5, 
+                label=f'{m_type.capitalize()} Trajectory', alpha=0.8)
+    wp_x = [wp[0] for wp in waypoints]
+    wp_y = [wp[1] for wp in waypoints]
+    ax1.plot(wp_x[0], wp_y[0], 'go', markersize=12, label='Start', zorder=5)
+    ax1.plot(wp_x[-1], wp_y[-1], 'r*', markersize=18, label='Goal', zorder=5)
+    ax1.set_xlabel('X [m]', fontsize=11)
+    ax1.set_ylabel('Y [m]', fontsize=11)
+    ax1.set_title(f'{scenario_name} - Trajectories', fontsize=12, fontweight='bold')
+    ax1.legend(fontsize=9, loc='best')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_aspect('equal')
+    
+    # Plot 2: Cross-Track Error (CTE)
+    ax2 = plt.subplot(2, 3, 2)
+    for m_type in models_to_use:
+        ax2.plot(histories[m_type]['time'], histories[m_type]['cte'], 
+                color=colors.get(m_type, 'black'), linewidth=2, 
+                label=f'{m_type.capitalize()}', alpha=0.8)
+    ax2.axhline(0, color='k', linestyle='--', alpha=0.3)
+    ax2.set_xlabel('Time [s]', fontsize=11)
+    ax2.set_ylabel('CTE [m]', fontsize=11)
+    ax2.set_title('Cross-Track Error (Stability)', fontsize=12, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Steering Angle
+    ax3 = plt.subplot(2, 3, 3)
+    for m_type in models_to_use:
+        ax3.plot(histories[m_type]['time'], np.degrees(histories[m_type]['steer']), 
+                color=colors.get(m_type, 'black'), linewidth=2, 
+                label=f'{m_type.capitalize()}', alpha=0.8)
+    ax3.set_xlabel('Time [s]', fontsize=11)
+    ax3.set_ylabel('Steering Angle [deg]', fontsize=11)
+    ax3.set_title('Steering Command', fontsize=12, fontweight='bold')
+    ax3.legend(fontsize=10)
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Speed Profile
+    ax4 = plt.subplot(2, 3, 4)
+    for m_type in models_to_use:
+        ax4.plot(histories[m_type]['time'], histories[m_type]['v'], 
+                color=colors.get(m_type, 'black'), linewidth=2, 
+                label=f'{m_type.capitalize()}', alpha=0.8)
+    ax4.set_xlabel('Time [s]', fontsize=11)
+    ax4.set_ylabel('Speed [m/s]', fontsize=11)
+    ax4.set_title('Velocity Profile', fontsize=12, fontweight='bold')
+    ax4.legend(fontsize=10)
+    ax4.grid(True, alpha=0.3)
+    
+    # Plot 5: Yaw Angle
+    ax5 = plt.subplot(2, 3, 5)
+    for m_type in models_to_use:
+        ax5.plot(histories[m_type]['time'], np.degrees(histories[m_type]['yaw']), 
+                color=colors.get(m_type, 'black'), linewidth=2, 
+                label=f'{m_type.capitalize()}', alpha=0.8)
+    ax5.set_xlabel('Time [s]', fontsize=11)
+    ax5.set_ylabel('Yaw Angle [deg]', fontsize=11)
+    ax5.set_title('Vehicle Heading', fontsize=12, fontweight='bold')
+    ax5.legend(fontsize=10)
+    ax5.grid(True, alpha=0.3)
+    
+    # Plot 6: Performance Metrics Radar
+    ax6 = plt.subplot(2, 3, 6, projection='polar')
+    metrics = ['CTE\nAccuracy', 'Speed\nStability', 'Steer\nSmoothing', 'Path\nTracking']
+    angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
+    angles += angles[:1]
+    
+    for m_type in models_to_use:
+        # Compute metrics (normalized 0-1)
+        max_cte = np.max(np.abs(histories[m_type]['cte'])) + 0.1
+        cte_score = 1.0 - np.clip(np.mean(np.abs(histories[m_type]['cte'])) / max_cte, 0, 1)
+        
+        speed_std = np.std(histories[m_type]['v'])
+        speed_score = 1.0 - np.clip(speed_std / 2.0, 0, 1)
+        
+        steer_diff = np.mean(np.abs(np.diff(histories[m_type]['steer'])))
+        steer_score = 1.0 - np.clip(steer_diff / 0.1, 0, 1)
+        
+        path_error = np.mean(np.abs(histories[m_type]['cte']))
+        path_score = 1.0 - np.clip(path_error / 3.0, 0, 1)
+        
+        values = [cte_score, speed_score, steer_score, path_score]
+        values += values[:1]
+        
+        ax6.plot(angles, values, 'o-', linewidth=2.5, markersize=6,
+                label=f'{m_type.capitalize()}', color=colors.get(m_type, 'black'), alpha=0.8)
+        ax6.fill(angles, values, alpha=0.15, color=colors.get(m_type, 'black'))
+    
+    ax6.set_xticks(angles[:-1])
+    ax6.set_xticklabels(metrics, fontsize=10)
+    ax6.set_ylim(0, 1)
+    ax6.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax6.set_yticklabels(['0.25', '0.5', '0.75', '1.0'], fontsize=9)
+    ax6.grid(True)
+    ax6.legend(loc='upper right', fontsize=10, bbox_to_anchor=(1.3, 1.1))
+    ax6.set_title('Performance Metrics', fontsize=12, fontweight='bold', pad=20)
+    
+    plt.tight_layout()
+    analysis_file = f'analysis_{scenario_name.lower().replace(" ", "_")}.png'
+    plt.savefig(analysis_file, dpi=150, bbox_inches='tight')
+    print(f"  ✓ Analysis plots saved to: {analysis_file}")
+    plt.close()
 
 if __name__ == "__main__":
     import sys
@@ -554,19 +675,47 @@ if __name__ == "__main__":
     if args.fast:
         print("Fast mode: ENABLED")
     
-    # Example scenarios to visualize
+    # Map presets with obstacles + multi-waypoint routes
     scenarios = [
         {
             'name': 'Simple Diagonal',
+            'map': 'diagonal',
+            'size': 60,
             'waypoints': [(5.0, 5.0), (50.0, 50.0)],
             'speed': 5.0,
             'output': f'diagonal_animation_{args.model}.mp4'
         },
         {
             'name': 'Complex Maze',
+            'map': 'maze',
+            'size': 60,
             'waypoints': [(5.0, 10.0), (25.0, 30.0), (50.0, 50.0)],
             'speed': 2.5,
             'output': f'maze_animation_{args.model}.mp4'
+        },
+        {
+            'name': 'Urban Blocks',
+            'map': 'urban',
+            'size': 80,
+            'waypoints': [(5.0, 5.0), (35.0, 5.0), (35.0, 40.0), (70.0, 40.0), (70.0, 70.0)],
+            'speed': 4.0,
+            'output': f'urban_animation_{args.model}.mp4'
+        },
+        {
+            'name': 'Warehouse Aisles',
+            'map': 'warehouse',
+            'size': 70,
+            'waypoints': [(5.0, 5.0), (5.0, 30.0), (20.0, 30.0), (20.0, 60.0), (60.0, 60.0)],
+            'speed': 3.5,
+            'output': f'warehouse_animation_{args.model}.mp4'
+        },
+        {
+            'name': 'Zigzag Park',
+            'map': 'park',
+            'size': 80,
+            'waypoints': [(5.0, 5.0), (20.0, 20.0), (35.0, 5.0), (50.0, 20.0), (65.0, 5.0), (75.0, 25.0)],
+            'speed': 4.0,
+            'output': f'park_animation_{args.model}.mp4'
         }
     ]
     
@@ -587,12 +736,9 @@ if __name__ == "__main__":
     
     # Create obstacles
     from run_validation import create_obstacle_environment
-    if scenario['name'] == 'Simple Diagonal':
-        ox, oy = create_obstacle_environment('diagonal', 60)
-        grid_size, robot_radius = 1.0, 2.0
-    else:
-        ox, oy = create_obstacle_environment('maze', 60)
-        grid_size, robot_radius = 1.0, 2.5
+    ox, oy = create_obstacle_environment(scenario.get('map', 'maze'), scenario.get('size', 60))
+    grid_size = 1.0
+    robot_radius = 2.0 if scenario['map'] in ['diagonal', 'urban', 'park'] else 2.5
     
     # Generate animation
     create_scenario_animation(
