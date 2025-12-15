@@ -11,10 +11,10 @@ class VehicleParams:
     CG_TO_REAR = WHEELBASE - CG_TO_FRONT  
     
     # Tire Parameters (Linear Model)
-    # Using your values: -600 N/rad seems low for a real car (usually ~1000+), 
-    # but we will keep your tuning to ensure stability with your previous testing.
-    C_ALPHA_FRONT = -600.0  
-    C_ALPHA_REAR = -600.0   
+    # Aggregate (both tires per axle) cornering stiffness; negative sign handled in dynamics
+    C_ALPHA_FRONT = 25000.0  
+    C_ALPHA_REAR = 25000.0   
+    MU = 0.9  # road friction coefficient used for lateral saturation
 
     # Aerodynamics & Friction
     AIR_DENSITY = 1.2      
@@ -23,6 +23,7 @@ class VehicleParams:
     ROLL_RESIST = 0.01  
     MAX_ENGINE_FORCE = 8000.0  
     BRAKE_FORCE_COEFF = 0.8    
+    LAT_AERO_DAMP = 40.0  # simple lateral damping term (N·s/m)
 
 class DynamicBicycleModel:
     def __init__(self, x=0, y=0, yaw=0, vx=0, vy=0, r=0):
@@ -43,23 +44,32 @@ class DynamicBicycleModel:
     def _compute_derivatives(self, state, throttle, steer):
         x, y, yaw, vx, vy, r = state
         p = self.params
-        speed = np.hypot(vx, vy)
+        speed = max(np.hypot(vx, vy), 1e-4)
         EPS = 1e-4
+        steer = np.clip(steer, -p.MAX_STEER, p.MAX_STEER)
+        vx_safe = np.sign(vx) * max(abs(vx), EPS)
 
         # 1. Slip Angle Calculation (Kinematics -> Dynamics)
-        if abs(vx) < EPS:
-            alpha_f, alpha_r = 0.0, 0.0
-        else:
-            alpha_f = (vy + p.CG_TO_FRONT * r) / abs(vx) - steer
-            alpha_r = (vy - p.CG_TO_REAR * r) / abs(vx)
+        alpha_f = np.arctan2(vy + p.CG_TO_FRONT * r, vx_safe) - steer
+        alpha_r = np.arctan2(vy - p.CG_TO_REAR * r, vx_safe)
 
         # 2. Tire Forces (Linear Model)
-        Fyf = p.C_ALPHA_FRONT * alpha_f
-        Fyr = p.C_ALPHA_REAR * alpha_r
+        Fyf = -p.C_ALPHA_FRONT * alpha_f
+        Fyr = -p.C_ALPHA_REAR * alpha_r
         
-        # Handle reverse logic
-        if vx < 0:
-            Fyf, Fyr = -Fyf, -Fyr
+        # Simple lateral damping to bleed side slip at speed
+        Fy_damp = -p.LAT_AERO_DAMP * vy * max(speed, EPS)
+        Fyf += 0.5 * Fy_damp
+        Fyr += 0.5 * Fy_damp
+
+        # Lateral force saturation (per axle) using friction limit
+        g = 9.81
+        Fz_front = p.MASS * g * p.CG_TO_REAR / p.WHEELBASE
+        Fz_rear = p.MASS * g * p.CG_TO_FRONT / p.WHEELBASE
+        Fy_front_limit = p.MU * Fz_front
+        Fy_rear_limit = p.MU * Fz_rear
+        Fyf = np.clip(Fyf, -Fy_front_limit, Fy_front_limit)
+        Fyr = np.clip(Fyr, -Fy_rear_limit, Fy_rear_limit)
 
         # 3. Longitudinal Forces
         if throttle >= 0:
@@ -71,7 +81,7 @@ class DynamicBicycleModel:
         Fdrag = 0.5 * p.AIR_DENSITY * p.DRAG_COEFF * p.FRONTAL_AREA * speed**2
         Froll = p.ROLL_RESIST * p.MASS * 9.81
         # Drag opposes velocity direction
-        drag_dir = -vx / (speed + EPS)  # Normalized direction opposite to motion
+        drag_dir = -vx_safe / (speed + EPS)  # Normalized direction opposite to motion
         Fx_net = Fx + drag_dir * (Fdrag + Froll)
 
         # 4. Equations of Motion (Newton-Euler)

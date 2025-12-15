@@ -9,6 +9,8 @@ import matplotlib.animation as animation
 from matplotlib.patches import Rectangle, FancyArrow, Polygon
 import argparse
 import sys
+from pathlib import Path
+from datetime import datetime
 from models.model_factory import create_vehicle, get_vehicle_params
 from models.vehicle_dynamics import DynamicBicycleModel, VehicleParams
 from planners.a_star import AStarPlanner
@@ -295,6 +297,9 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     print(f"  Generating animation...")
     
     # Determine layout based on comparison mode
+    suptitle = f"{scenario_name} | Model: {', '.join([m.title() for m in models_to_use])} | Controller: {controller_type}"
+    if fast_mode:
+        suptitle += " | fast"
     if len(models_to_use) > 1:
         # Comparison mode: side-by-side
         fig = plt.figure(figsize=(18, 8))
@@ -302,6 +307,7 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
         ax1_kin = fig.add_subplot(gs[0, 0])
         ax1_dyn = fig.add_subplot(gs[1, 0])
         ax2 = fig.add_subplot(gs[:, 1])
+        fig.suptitle(suptitle, fontsize=14, fontweight='bold')
         
         # Setup axes for both models
         for ax_idx, (m_type, ax1) in enumerate([(models_to_use[0], ax1_kin), (models_to_use[1], ax1_dyn)]):
@@ -323,6 +329,7 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     else:
         # Single model mode
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        fig.suptitle(suptitle, fontsize=14, fontweight='bold')
         ax1.set_xlim(min(ox) - 5, max(ox) + 5)
         ax1.set_ylim(min(oy) - 5, max(oy) + 5)
         ax1.set_aspect('equal')
@@ -488,7 +495,7 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
         h = histories[models_to_use[0]]
         x, y, yaw = h['x'][frame], h['y'][frame], h['yaw'][frame]
         v = h['v'][frame]
-        info_str = f"Time: {h['time'][frame]:.1f}s | Model: {models_to_use[0].title()}\n"
+        info_str = f"Time: {h['time'][frame]:.1f}s | Model: {models_to_use[0].title()} | Ctrl: {controller_type}\n"
         info_str += f"Pos: ({x:.1f}, {y:.1f}) | Speed: {v:.2f} m/s\n"
         info_str += f"CTE: {h['cte'][frame]:.2f} m | Heading: {np.degrees(yaw):.1f}°"
         info_text.set_text(info_str)
@@ -504,19 +511,21 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     anim = animation.FuncAnimation(fig, animate, init_func=init,
                                   frames=frame_indices, interval=50,
                                   blit=False, repeat=True)
-    
-    # Save animation
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         Writer = animation.writers['ffmpeg']
         writer = Writer(fps=export_fps, bitrate=export_bitrate, codec='libx264')
-        anim.save(output_file, writer=writer)
-        print(f"  ✓ Animation saved to: {output_file}")
+        anim.save(str(output_path), writer=writer)
+        print(f"  ✓ Animation saved to: {output_path}")
     except Exception as e:
         print(f"  ✗ Failed to save video (ffmpeg required): {e}")
         print(f"  Attempting GIF export instead...")
         try:
-            anim.save(output_file.replace('.mp4', '.gif'), writer='pillow', fps=15)
-            print(f"  ✓ Animation saved as GIF: {output_file.replace('.mp4', '.gif')}")
+            gif_path = output_path.with_suffix('.gif')
+            anim.save(str(gif_path), writer='pillow', fps=15)
+            print(f"  ✓ Animation saved as GIF: {gif_path}")
         except Exception as e2:
             print(f"  ✗ GIF export also failed: {e2}")
             print(f"  Displaying animation instead...")
@@ -640,9 +649,13 @@ def generate_analysis_plots(scenario_name, models_to_use, histories, path_x, pat
     ax6.set_title('Performance Metrics', fontsize=12, fontweight='bold', pad=20)
     
     plt.tight_layout()
-    analysis_file = f'analysis_{scenario_name.lower().replace(" ", "_")}.png'
-    plt.savefig(analysis_file, dpi=150, bbox_inches='tight')
-    print(f"  ✓ Analysis plots saved to: {analysis_file}")
+    analysis_dir = Path(__file__).parent / 'output' / 'analysis'
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    scenario_slug = scenario_name.lower().replace(" ", "_")
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamped_analysis_file = analysis_dir / f'analysis_{scenario_slug}_{timestamp}.png'
+    plt.savefig(timestamped_analysis_file, dpi=150, bbox_inches='tight')
+    print(f"  ✓ Analysis plots saved to: {timestamped_analysis_file}")
     plt.close()
 
 if __name__ == "__main__":
@@ -676,6 +689,15 @@ if __name__ == "__main__":
         print("Fast mode: ENABLED")
     
     # Map presets with obstacles + multi-waypoint routes
+    anim_dir = Path(__file__).parent / 'output' / 'animations'
+    anim_dir.mkdir(parents=True, exist_ok=True)
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    def scenario_output(name):
+        slug = name.lower().replace(' ', '_')
+        fast_tag = '_fast' if args.fast else ''
+        return anim_dir / f"{slug}__{args.model}__{args.controller}{fast_tag}__{run_timestamp}.mp4"
+
     scenarios = [
         {
             'name': 'Simple Diagonal',
@@ -683,7 +705,7 @@ if __name__ == "__main__":
             'size': 60,
             'waypoints': [(5.0, 5.0), (50.0, 50.0)],
             'speed': 5.0,
-            'output': f'diagonal_animation_{args.model}.mp4'
+            'output': scenario_output('Simple Diagonal')
         },
         {
             'name': 'Complex Maze',
@@ -691,7 +713,7 @@ if __name__ == "__main__":
             'size': 60,
             'waypoints': [(5.0, 10.0), (25.0, 30.0), (50.0, 50.0)],
             'speed': 2.5,
-            'output': f'maze_animation_{args.model}.mp4'
+            'output': scenario_output('Complex Maze')
         },
         {
             'name': 'Urban Blocks',
@@ -699,7 +721,7 @@ if __name__ == "__main__":
             'size': 80,
             'waypoints': [(5.0, 5.0), (35.0, 5.0), (35.0, 40.0), (70.0, 40.0), (70.0, 70.0)],
             'speed': 4.0,
-            'output': f'urban_animation_{args.model}.mp4'
+            'output': scenario_output('Urban Blocks')
         },
         {
             'name': 'Warehouse Aisles',
@@ -707,7 +729,7 @@ if __name__ == "__main__":
             'size': 70,
             'waypoints': [(5.0, 5.0), (5.0, 30.0), (20.0, 30.0), (20.0, 60.0), (60.0, 60.0)],
             'speed': 3.5,
-            'output': f'warehouse_animation_{args.model}.mp4'
+            'output': scenario_output('Warehouse Aisles')
         },
         {
             'name': 'Zigzag Park',
@@ -715,7 +737,7 @@ if __name__ == "__main__":
             'size': 80,
             'waypoints': [(5.0, 5.0), (20.0, 20.0), (35.0, 5.0), (50.0, 20.0), (65.0, 5.0), (75.0, 25.0)],
             'speed': 4.0,
-            'output': f'park_animation_{args.model}.mp4'
+            'output': scenario_output('Zigzag Park')
         }
     ]
     
@@ -724,7 +746,7 @@ if __name__ == "__main__":
     for i, s in enumerate(scenarios):
         print(f"  {i+1}. {s['name']}")
     
-    choice = input("\nSelect scenario (1-2) or press Enter for default [1]: ").strip()
+    choice = input("\nSelect scenario (1-5) or press Enter for default [1]: ").strip()
     if not choice:
         choice = '1'
     
