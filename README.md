@@ -15,9 +15,7 @@ source .venv/bin/activate
 2) Install dependencies
 
 ```bash
-pip install -r ../requirements.txt
-# or if running standalone from this folder
-pip install -r requirments.txt  # note: file name has a typo
+pip install -r requirements.txt
 ```
 
 3) Run a quick check
@@ -45,6 +43,17 @@ python compare_models.py
 python create_vehicle_comparison.py
 python visualize_scenario.py
 ```
+
+### Scripts Guide
+
+- Purpose and when to use each:
+  - [main.py](main.py): Full pipeline (A* + controller + model). Start here.
+  - [compare_models.py](compare_models.py): Side-by-side kinematic vs dynamic comparison.
+  - [visualize_scenario.py](visualize_scenario.py): Produce animations/videos; supports `--model` and `--controller`.
+  - [test_maze_quick.py](test_maze_quick.py): 5-second smoke test to verify setup.
+  - [run_validation.py](run_validation.py): Batch scenarios + metrics for stability analysis.
+  - [keyboard_control.py](keyboard_control.py): Manual control or scheduled inputs from CSV.
+  - [create_vehicle_comparison.py](create_vehicle_comparison.py): Static visualization of steering geometry.
 
 - Validation & debug helpers:
 ```bash
@@ -90,7 +99,7 @@ Most scripts have parameters near the top (e.g., speed, wheelbase, controller ch
   - Ensure `source .venv/bin/activate` before running.
 
 - Missing dependencies:
-  - Install with `pip install -r ../requirements.txt` (root-level) or `pip install -r requirments.txt` (local, note the file name typo).
+  - Install with `pip install -r requirements.txt`.
 
 - Matplotlib backend issues on macOS:
   - Try `pip install pillow` and set `matplotlib.use("Agg")` for headless environments.
@@ -116,12 +125,14 @@ Most scripts have parameters near the top (e.g., speed, wheelbase, controller ch
 
 ```bash
 # Run main with venv
-source ../.venv/bin/activate
+source .venv/bin/activate
 python main.py
 
 # Compare kinematic vs dynamic behavior
 python compare_models.py
 
 # Visualize a scenario
-python visualize_scenario.py
+python visualize_scenario.py --model kinematic --controller stanley
+python visualize_scenario.py --model dynamic --controller lqr
+python visualize_scenario.py --model both --controller pure_pursuit --fast
 ```

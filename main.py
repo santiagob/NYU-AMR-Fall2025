@@ -1,3 +1,22 @@
+"""
+Main simulation loop: Path Planning → Vehicle Control → Trajectory Tracking
+
+This script demonstrates the complete pipeline:
+1) Define grid obstacles and start/goal
+2) Plan a path using A*
+3) Initialize the selected vehicle model (kinematic or dynamic)
+4) Track the path using a controller (Stanley/PID by default)
+5) Plot or log trajectory/stability metrics
+
+Usage:
+    python main.py              # default (kinematic)
+    # Or from other modules: main(model_type="dynamic")
+
+Outputs:
+    - Console logs for planning and controller updates
+    - Matplotlib windows (trajectory/metrics) depending on environment
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import math

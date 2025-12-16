@@ -1,11 +1,12 @@
 """
-Create a comparison showing the vehicle at different steering angles
+Create a comparison showing the vehicle at different steering angles.
+
+This script displays the Ackerman vehicle in different steering configurations
+to visualize how the steering angles affect vehicle geometry and turning.
 """
 import numpy as np
 import matplotlib.pyplot as plt
 from models.vehicle_dynamics import VehicleParams
-import sys
-sys.path.insert(0, '/Users/santiagobernheim/Documents/Projects/NYU/NYU-AMR-Fall2025/Ackerman_Simulator')
 from visualize_scenario import get_car_body_vertices, get_wheel_vertices
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
