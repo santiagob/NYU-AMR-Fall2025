@@ -352,7 +352,7 @@ def create_obstacle_environment(scenario_type, map_size=60):
     ox, oy = [], []
     
     # Boundary walls (common to all)
-    for i in range(map_size):
+    for i in range(map_size + 1):
         ox.append(i); oy.append(0.0)
         ox.append(i); oy.append(map_size)
     for i in range(map_size):
@@ -460,6 +460,58 @@ def create_obstacle_environment(scenario_type, map_size=60):
         for i in range(35, 45):
             ox.append(45.0); oy.append(i)
     
+    # Support alias maps used by visualize_scenario
+    if scenario_type == "urban":
+        # Urban grid with navigable streets - buildings as solid blocks
+        block_size = 5
+        street_width = 10
+        for bx in range(0, map_size, block_size + street_width):
+            for by in range(0, map_size, block_size + street_width):
+                # Create building block (leave streets clear)
+                for i in range(block_size):
+                    for j in range(block_size):
+                        x_pos = bx + i + 3
+                        y_pos = by + j + 3
+                        # Only place obstacles in building zones, not in street margins
+                        if 3 <= x_pos < map_size - 3 and 3 <= y_pos < map_size - 3:
+                            # Check we're actually in a building block, not a street
+                            in_street_x = ((x_pos - 3) % (block_size + street_width)) >= block_size
+                            in_street_y = ((y_pos - 3) % (block_size + street_width)) >= block_size
+                            if not in_street_x and not in_street_y:
+                                ox.append(x_pos)
+                                oy.append(y_pos)
+    elif scenario_type == "warehouse":
+        # Warehouse with sparse shelves and wide aisles
+        shelf_rows = [12, 24, 36, 48]  # fewer rows
+        shelf_thickness = 2            # thinner shelves
+        aisle_columns = [12, 28, 44, 60]  # more aisles, wider spacing
+        
+        for row_y in shelf_rows:
+            if row_y < map_size - 5:
+                for x in range(6, map_size - 6):
+                    # Leave wide gaps at aisle columns
+                    is_aisle = any(abs(x - col) < 5 for col in aisle_columns)
+                    if not is_aisle:
+                        for dy in range(shelf_thickness):
+                            if row_y + dy < map_size - 6:
+                                ox.append(x)
+                                oy.append(row_y + dy)
+    elif scenario_type == "park":
+        np.random.seed(7)
+        num_clusters = int(map_size * 0.6)
+        for _ in range(num_clusters):
+            cx = np.random.randint(8, map_size - 8)
+            cy = np.random.randint(8, map_size - 8)
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if dx*dx + dy*dy <= 3:
+                        ox.append(cx + dx); oy.append(cy + dy)
+        num_gates = max(4, map_size // 12)
+        for gate in range(num_gates):
+            y_pos = 8 + gate * 8
+            x_start = 12 if gate % 2 == 0 else max(12, map_size - 24)
+            for i in range(12):
+                ox.append(x_start + i); oy.append(y_pos)
     return ox, oy
 
 def main():

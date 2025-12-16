@@ -11,6 +11,132 @@ import argparse
 import sys
 from pathlib import Path
 from datetime import datetime
+
+# Visual style tuned for paper-quality figures
+PALETTE = {
+    'bg': '#f7f7f7',
+    'axes': '#ffffff',
+    'grid': '#d8d8d8',
+    'obstacle': '#4a4a4a',
+    'path': '#c75146',
+    'start': '#2f6f4e',
+    'goal': '#b0191f',
+    'waypoint': '#d19a2e',
+    'kinematic': '#1d3557',
+    'dynamic': '#0b7285',
+    'metrics': '#0b7285',
+    'info_box': '#f1f3f5'
+}
+
+def apply_plot_style():
+    plt.rcParams.update({
+        'figure.facecolor': PALETTE['bg'],
+        'axes.facecolor': PALETTE['axes'],
+        'axes.grid': True,
+        'grid.color': PALETTE['grid'],
+        'grid.alpha': 0.35,
+        'axes.edgecolor': '#444444',
+        'axes.labelsize': 11,
+        'axes.titlesize': 13,
+        'font.size': 10,
+        'legend.fontsize': 9,
+        'lines.linewidth': 2.0,
+        'axes.spines.top': False,
+        'axes.spines.right': False
+    })
+
+def save_failure_snapshot(ox, oy, start, goal, output_image_path, title="Path Planning Failed", waypoints=None):
+    """Save a static snapshot of the map with obstacles, start/goal, and waypoints when planning fails."""
+    try:
+        plt.figure(figsize=(8, 8))
+        plt.scatter(ox, oy, s=8, c=PALETTE['obstacle'], alpha=0.7, label='Obstacles')
+        if waypoints:
+            # Plot all waypoints to expose impossible placements
+            wx, wy = zip(*waypoints)
+            plt.scatter(wx, wy, s=35, c=PALETTE['waypoint'], marker='s', alpha=0.8, label='Waypoints')
+            # Annotate indices for clarity
+            for idx, (xw, yw) in enumerate(waypoints):
+                plt.text(xw + 0.4, yw + 0.4, str(idx), fontsize=8, color='#444444')
+        plt.plot([start[0]], [start[1]], marker='o', color=PALETTE['start'], markersize=10, label='Start')
+        plt.plot([goal[0]], [goal[1]], marker='X', color=PALETTE['goal'], markersize=10, label='Goal')
+        plt.title(title, fontsize=13, fontweight='bold')
+        plt.xlabel('X [m]')
+        plt.ylabel('Y [m]')
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='upper right')
+        plt.axis('equal')
+        # Add border for clarity
+        ax = plt.gca()
+        add_map_border(ax, ox, oy, margin=5.0)
+        plt.savefig(output_image_path, dpi=200, bbox_inches='tight')
+        print(f"  ✓ Saved failure snapshot: {output_image_path}")
+    except Exception as e:
+        print(f"  ⚠ Could not save failure snapshot: {e}")
+    finally:
+        plt.close()
+
+def add_map_border(ax, ox, oy, margin=5.0):
+    """Draw a closed rectangular border slightly inside the axis limits to avoid clipping."""
+    from matplotlib.patches import Rectangle
+    try:
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        use_axes_limits = np.isfinite(x0) and np.isfinite(x1) and np.isfinite(y0) and np.isfinite(y1)
+    except Exception:
+        use_axes_limits = False
+
+    if use_axes_limits:
+        min_x, max_x = x0, x1
+        min_y, max_y = y0, y1
+    else:
+        min_x, max_x = min(ox) - margin, max(ox) + margin
+        min_y, max_y = min(oy) - margin, max(oy) + margin
+
+    # Inset the border slightly within the axes to ensure all edges render
+    inset = 0.2
+    width = max_x - min_x - 2 * inset
+    height = max_y - min_y - 2 * inset
+    border = Rectangle((min_x + inset, min_y + inset), width, height,
+                       fill=False, edgecolor='#333333', linewidth=1.2, zorder=50, clip_on=False)
+    ax.add_patch(border)
+
+def apply_axis_dimensions(ax):
+    """Append dimension ranges to axis labels (e.g., X [m])."""
+    xmin, xmax = ax.get_xlim()
+    ymin, ymax = ax.get_ylim()
+    xlab = ax.get_xlabel() or 'X [m]'
+    ylab = ax.get_ylabel() or 'Y [m]'
+    ax.set_xlabel(f"{xlab}", fontsize=10, fontweight='bold')
+    ax.set_ylabel(f"{ylab}", fontsize=10, fontweight='bold')
+
+def draw_obstacles_as_blocks(ax, ox, oy, block_size=1.0, palette=PALETTE):
+    """Draw point obstacles as filled rectangular blocks for professional appearance."""
+    from matplotlib.patches import Rectangle
+    half_size = block_size / 2.0
+    
+    # Group nearby points into clusters and draw as blocks
+    drawn = set()
+    for i, (x, y) in enumerate(zip(ox, oy)):
+        if i in drawn:
+            continue
+        # Create block centered at obstacle point
+        rect = Rectangle((x - half_size, y - half_size), block_size, block_size,
+                         facecolor=palette['obstacle'], edgecolor='#2a2a2a',
+                         linewidth=0.8, alpha=0.75, zorder=5)
+        ax.add_patch(rect)
+        drawn.add(i)
+
+def add_scale_bar(ax, width_m=10, location='lower right', palette=PALETTE):
+    """Add scale information to axis labels."""
+    # Get current axis label
+    current_xlabel = ax.get_xlabel()
+    current_ylabel = ax.get_ylabel()
+    
+    # Append scale info to labels
+    if 'X [m]' in current_xlabel:
+        ax.set_xlabel(f'{current_xlabel}\n(1 unit = 1 m)', fontsize=10, fontweight='bold')
+    if 'Y [m]' in current_ylabel:
+        ax.set_ylabel(f'{current_ylabel}\n(1 unit = 1 m)', fontsize=10, fontweight='bold')
 from models.model_factory import create_vehicle, get_vehicle_params
 from models.vehicle_dynamics import DynamicBicycleModel, VehicleParams
 from planners.a_star import AStarPlanner
@@ -113,18 +239,102 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     if compare_models or model_type == 'both':
         print(f"Mode: COMPARISON (Kinematic vs Dynamic)")
     print(f"{'='*60}")
+
+    apply_plot_style()
     
+    def snap_to_free(planner, x, y):
+        """Snap a point to nearest free cell within small radius."""
+        xi = planner.calc_xy_index(x, planner.min_x)
+        yi = planner.calc_xy_index(y, planner.min_y)
+        best = (x, y)
+        if 0 <= xi < planner.x_width and 0 <= yi < planner.y_width:
+            if not planner.obstacle_map[xi][yi]:
+                return x, y
+        # Search nearby cells
+        for r in range(1, 4):
+            for dx in range(-r, r+1):
+                for dy in range(-r, r+1):
+                    nx, ny = xi + dx, yi + dy
+                    if 0 <= nx < planner.x_width and 0 <= ny < planner.y_width:
+                        if not planner.obstacle_map[nx][ny]:
+                            return planner.calc_grid_position(nx, planner.min_x), planner.calc_grid_position(ny, planner.min_y)
+        return best
+
+    def try_plan_segment(planner, sx, sy, gx, gy):
+        """Attempt planning with progressive relaxations before giving up."""
+        # 1) Try as-is
+        path = planner.planning(sx, sy, gx, gy)
+        if path is not None:
+            return path
+        
+        # 2) Snap start/goal to nearest free cells
+        sxf, syf = snap_to_free(planner, sx, sy)
+        gxf, gyf = snap_to_free(planner, gx, gy)
+        path = planner.planning(sxf, syf, gxf, gyf)
+        if path is not None:
+            return path
+        
+        # 3) Reduce robot radius and retry
+        for rr in [max(0.8, robot_radius*0.75), 0.6]:
+            relaxed = AStarPlanner(ox, oy, grid_size, rr)
+            sxf, syf = snap_to_free(relaxed, sx, sy)
+            gxf, gyf = snap_to_free(relaxed, gx, gy)
+            path = relaxed.planning(sxf, syf, gxf, gyf)
+            if path is not None:
+                return path
+        
+        # 4) Increase grid size slightly for coarser planning
+        for gs in [grid_size*1.5]:
+            relaxed = AStarPlanner(ox, oy, gs, max(0.8, robot_radius*0.75))
+            sxf, syf = snap_to_free(relaxed, sx, sy)
+            gxf, gyf = snap_to_free(relaxed, gx, gy)
+            path = relaxed.planning(sxf, syf, gxf, gyf)
+            if path is not None:
+                return path
+        
+        return None
+
     # Plan path
     planner = AStarPlanner(ox, oy, grid_size, robot_radius)
     all_path_x, all_path_y = [], []
     
+    # Pre-check waypoints for safety and snap to nearest free cell if needed
+    adjusted_waypoints = list(waypoints)
+    for idx, (wx, wy) in enumerate(adjusted_waypoints):
+        xi = planner.calc_xy_index(wx, planner.min_x)
+        yi = planner.calc_xy_index(wy, planner.min_y)
+        is_blocked = False
+        if 0 <= xi < planner.x_width and 0 <= yi < planner.y_width:
+            is_blocked = planner.obstacle_map[xi][yi]
+        if is_blocked:
+            safe_x, safe_y = snap_to_free(planner, wx, wy)
+            print(f"  ⚠ Waypoint {idx} at ({wx:.1f}, {wy:.1f}) was blocked. Snapped to ({safe_x:.1f}, {safe_y:.1f}).")
+            adjusted_waypoints[idx] = (safe_x, safe_y)
+    waypoints = adjusted_waypoints
+
     for i in range(len(waypoints) - 1):
         sx, sy = waypoints[i]
         gx, gy = waypoints[i + 1]
-        path = planner.planning(sx, sy, gx, gy)
+        path = try_plan_segment(planner, sx, sy, gx, gy)
         
         if path is None:
             print(f"  ✗ Path planning failed for segment {i+1}!")
+            # Fallback: save static snapshot with initial and final conditions
+            overall_start = waypoints[0]
+            overall_goal = waypoints[-1]
+            # Derive PNG path next to animation output if available
+            fallback_png = None
+            try:
+                from pathlib import Path
+                fallback_png = Path(output_file).with_suffix('').as_posix() + '__planning_failed.png' if output_file else None
+            except Exception:
+                fallback_png = None
+            if fallback_png is None:
+                # Default to local file name
+                fallback_png = f"{scenario_name.lower().replace(' ', '_')}_planning_failed.png"
+            save_failure_snapshot(ox, oy, overall_start, overall_goal, fallback_png,
+                                  title=f"{scenario_name} - Planning Failed",
+                                  waypoints=waypoints)
             return None
         
         if i == 0:
@@ -308,41 +518,61 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
         ax1_dyn = fig.add_subplot(gs[1, 0])
         ax2 = fig.add_subplot(gs[:, 1])
         fig.suptitle(suptitle, fontsize=14, fontweight='bold')
+        fig.patch.set_facecolor(PALETTE['bg'])
         
         # Setup axes for both models
         for ax_idx, (m_type, ax1) in enumerate([(models_to_use[0], ax1_kin), (models_to_use[1], ax1_dyn)]):
             ax1.set_xlim(min(ox) - 5, max(ox) + 5)
             ax1.set_ylim(min(oy) - 5, max(oy) + 5)
             ax1.set_aspect('equal')
-            ax1.set_xlabel('X [m]', fontsize=10)
-            ax1.set_ylabel('Y [m]', fontsize=10)
+            ax1.set_facecolor(PALETTE['axes'])
+            ax1.set_xlabel('X [m]', fontsize=10, fontweight='bold')
+            ax1.set_ylabel('Y [m]', fontsize=10, fontweight='bold')
             ax1.set_title(f'{m_type.capitalize()} Model', fontsize=12, fontweight='bold')
-            ax1.grid(True, alpha=0.3)
-            ax1.plot(ox, oy, '.k', markersize=2, alpha=0.8)
-            ax1.plot(path_x, path_y, '--r', linewidth=2, alpha=0.5)
+            ax1.grid(True, linewidth=0.5, linestyle=':')
+            draw_obstacles_as_blocks(ax1, ox, oy, block_size=1.2)
+            ax1.plot(path_x, path_y, linestyle='--', color=PALETTE['path'], linewidth=2.2, alpha=0.85)
+            add_map_border(ax1, ox, oy, margin=5.0)
+            apply_axis_dimensions(ax1)
             wp_x = [wp[0] for wp in waypoints]
             wp_y = [wp[1] for wp in waypoints]
-            ax1.plot(wp_x[0], wp_y[0], 'go', markersize=12, zorder=10)
-            ax1.plot(wp_x[-1], wp_y[-1], 'r*', markersize=18, zorder=10)
+            # Start marker
+            ax1.plot(wp_x[0], wp_y[0], marker='o', color=PALETTE['start'], markersize=10, zorder=10, label='Start')
+            # Intermediate waypoints as small balls
+            if len(waypoints) > 2:
+                ax1.plot(wp_x[1:-1], wp_y[1:-1], linestyle='None', marker='o',
+                         color=PALETTE['waypoint'], markersize=5, zorder=9, label='Waypoint')
+            # Goal marker as circle
+            ax1.plot(wp_x[-1], wp_y[-1], marker='o', color=PALETTE['goal'], markersize=10, zorder=10, label='Goal')
         
         ax_dict = {models_to_use[0]: ax1_kin, models_to_use[1]: ax1_dyn}
     else:
         # Single model mode
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
         fig.suptitle(suptitle, fontsize=14, fontweight='bold')
+        fig.patch.set_facecolor(PALETTE['bg'])
         ax1.set_xlim(min(ox) - 5, max(ox) + 5)
         ax1.set_ylim(min(oy) - 5, max(oy) + 5)
         ax1.set_aspect('equal')
-        ax1.set_xlabel('X [m]', fontsize=12)
-        ax1.set_ylabel('Y [m]', fontsize=12)
+        ax1.set_facecolor(PALETTE['axes'])
+        ax1.set_xlabel('X [m]', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Y [m]', fontsize=12, fontweight='bold')
         ax1.set_title(f'{scenario_name}{title_suffix}', fontsize=14, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
-        ax1.plot(ox, oy, '.k', markersize=2, alpha=0.8, label='Obstacles')
-        ax1.plot(path_x, path_y, '--r', linewidth=2, alpha=0.5, label='Planned Path')
+        ax1.grid(True, linewidth=0.5, linestyle=':')
+        draw_obstacles_as_blocks(ax1, ox, oy, block_size=1.2)
+        ax1.plot(path_x, path_y, linestyle='--', color=PALETTE['path'], linewidth=2.4, alpha=0.88, label='Planned Path', zorder=6)
+        add_map_border(ax1, ox, oy, margin=5.0)
+        apply_axis_dimensions(ax1)
         wp_x = [wp[0] for wp in waypoints]
         wp_y = [wp[1] for wp in waypoints]
-        ax1.plot(wp_x[0], wp_y[0], 'go', markersize=15, label='Start', zorder=10)
-        ax1.plot(wp_x[-1], wp_y[-1], 'r*', markersize=20, label='Goal', zorder=10)
+        # Start marker
+        ax1.plot(wp_x[0], wp_y[0], marker='o', color=PALETTE['start'], markersize=11, label='Start', zorder=10)
+        # Intermediate waypoints as small balls
+        if len(waypoints) > 2:
+            ax1.plot(wp_x[1:-1], wp_y[1:-1], linestyle='None', marker='o',
+                     color=PALETTE['waypoint'], markersize=5, label='Waypoint', zorder=9)
+        # Goal marker as circle
+        ax1.plot(wp_x[-1], wp_y[-1], marker='o', color=PALETTE['goal'], markersize=11, label='Goal', zorder=10)
         ax1.legend(loc='upper right', fontsize=9)
         ax_dict = {models_to_use[0]: ax1}
     
@@ -352,25 +582,26 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
     ax2.set_xlabel('Time [s]', fontsize=12)
     ax2.set_ylabel('Value', fontsize=12)
     ax2.set_title('Real-time Metrics', fontsize=14, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
+    ax2.set_facecolor(PALETTE['axes'])
+    ax2.grid(True, linewidth=0.5, linestyle=':')
     
     # Create line objects for each model
-    colors = {'kinematic': 'blue', 'dynamic': 'red'}
+    colors = {'kinematic': PALETTE['kinematic'], 'dynamic': PALETTE['dynamic']}
     lines_dict = {}
     for m_type in models_to_use:
-        cte_line, = ax2.plot([], [], linestyle='-', linewidth=2, 
+        cte_line, = ax2.plot([], [], linestyle='-', linewidth=2.2, 
                             color=colors.get(m_type, 'black'),
-                            label=f'{m_type.capitalize()} CTE')
+                            label=f'{m_type.capitalize()} CTE', alpha=0.9)
         lines_dict[f'{m_type}_cte'] = cte_line
     
-    ax2.axhline(0, color='k', linestyle='--', alpha=0.3)
-    ax2.legend(loc='upper right', fontsize=10)
+    ax2.axhline(0, color='#666666', linestyle='--', alpha=0.4, linewidth=1.5)
+    ax2.legend(loc='upper right', fontsize=10, framealpha=0.95)
     
     # Info text (on first trajectory plot)
     first_ax = ax_dict[models_to_use[0]]
     info_text = first_ax.text(0.02, 0.98, '', transform=first_ax.transAxes, 
                              fontsize=11, verticalalignment='top',
-                             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9),
+                             bbox=dict(boxstyle='round', facecolor=PALETTE['info_box'], alpha=0.95),
                              fontfamily='monospace')
     
     def init():
@@ -380,12 +611,22 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
             ax1.set_xlim(min(ox) - 5, max(ox) + 5)
             ax1.set_ylim(min(oy) - 5, max(oy) + 5)
             ax1.set_aspect('equal')
-            ax1.plot(ox, oy, '.k', markersize=2, alpha=0.8)
-            ax1.plot(path_x, path_y, '--r', linewidth=2, alpha=0.5)
+            ax1.set_facecolor(PALETTE['axes'])
+            ax1.grid(True, linewidth=0.5, linestyle=':')
+            draw_obstacles_as_blocks(ax1, ox, oy, block_size=1.2)
+            ax1.plot(path_x, path_y, linestyle='--', color=PALETTE['path'], linewidth=2, alpha=0.8, zorder=6)
+            add_map_border(ax1, ox, oy, margin=5.0)
+            apply_axis_dimensions(ax1)
             wp_x = [wp[0] for wp in waypoints]
             wp_y = [wp[1] for wp in waypoints]
-            ax1.plot(wp_x[0], wp_y[0], 'go', markersize=12, zorder=10)
-            ax1.plot(wp_x[-1], wp_y[-1], 'r*', markersize=18, zorder=10)
+            # Start marker
+            ax1.plot(wp_x[0], wp_y[0], marker='o', color=PALETTE['start'], markersize=10, zorder=10)
+            # Intermediate waypoints as small balls
+            if len(waypoints) > 2:
+                ax1.plot(wp_x[1:-1], wp_y[1:-1], linestyle='None', marker='o',
+                         color=PALETTE['waypoint'], markersize=5, zorder=9)
+            # Goal marker as circle
+            ax1.plot(wp_x[-1], wp_y[-1], marker='o', color=PALETTE['goal'], markersize=10, zorder=10)
         
         for line in lines_dict.values():
             line.set_data([], [])
@@ -428,13 +669,13 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
             # Initialize vehicle elements for this model if needed
             if m_type not in vehicle_elements:
                 # Trajectory line
-                traj_line, = ax.plot([], [], color='blue', linewidth=2.5, alpha=0.8)
+                traj_line, = ax.plot([], [], color=PALETTE.get(m_type, '#1f1f1f'), linewidth=2.6, alpha=0.9)
                 # Vehicle body
-                car_body, = ax.plot([], [], 'k-', linewidth=2)
+                car_body, = ax.plot([], [], color='#222222', linewidth=2.2)
                 # Wheels
-                wheels = [ax.plot([], [], 'k-', linewidth=1.5)[0] for _ in range(4)]
-                # Target point
-                target_pt, = ax.plot([], [], 'r*', markersize=15)
+                wheels = [ax.plot([], [], color='#555555', linewidth=1.4)[0] for _ in range(4)]
+                # Target point (controller target) as a small ball
+                target_pt, = ax.plot([], [], marker='o', color=PALETTE['goal'], markersize=5)
                 # Velocity arrow
                 arrow_patch = None
                 
@@ -467,8 +708,8 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
                 arrow_len = min(v * 1.5, 5)
                 dx = arrow_len * np.cos(yaw)
                 dy = arrow_len * np.sin(yaw)
-                arrow = FancyArrow(x, y, dx, dy, width=0.5, head_width=1.5,
-                                  head_length=1, fc='green', ec='darkgreen', alpha=0.7)
+                arrow = FancyArrow(x, y, dx, dy, width=0.45, head_width=1.3,
+                                  head_length=0.9, fc=PALETTE['dynamic'], ec='#0c5b6a', alpha=0.75)
                 ax.add_patch(arrow)
                 elems['arrow'] = arrow
             
@@ -512,7 +753,8 @@ def create_scenario_animation(scenario_name, ox, oy, waypoints, target_speed,
                                   frames=frame_indices, interval=50,
                                   blit=False, repeat=True)
 
-    output_path = Path(output_file)
+    import pathlib
+    output_path = pathlib.Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         Writer = animation.writers['ffmpeg']
@@ -542,78 +784,87 @@ def generate_analysis_plots(scenario_name, models_to_use, histories, path_x, pat
     """Generate static analysis plots comparing models (trajectory, metrics, performance radar)."""
     n_models = len(models_to_use)
     fig = plt.figure(figsize=(16, 12))
+    fig.patch.set_facecolor(PALETTE['bg'])
     
     # Plot 1: Trajectory comparison
     ax1 = plt.subplot(2, 3, 1)
-    ax1.plot(ox, oy, '.k', markersize=1, alpha=0.6, label='Obstacles')
-    ax1.plot(path_x, path_y, '--r', linewidth=2, alpha=0.5, label='Planned Path')
-    colors = {'kinematic': 'blue', 'dynamic': 'red'}
+    ax1.set_facecolor(PALETTE['axes'])
+    ax1.set_xlabel('X [m]', fontsize=11, fontweight='bold')
+    ax1.set_ylabel('Y [m]', fontsize=11, fontweight='bold')
+    draw_obstacles_as_blocks(ax1, ox, oy, block_size=1.2)
+    ax1.plot(path_x, path_y, linestyle='--', color=PALETTE['path'], linewidth=2.4, alpha=0.85, label='Planned Path', zorder=6)
+    add_map_border(ax1, ox, oy, margin=5.0)
+    apply_axis_dimensions(ax1)
+    colors = {'kinematic': PALETTE['kinematic'], 'dynamic': PALETTE['dynamic']}
     for m_type in models_to_use:
         ax1.plot(histories[m_type]['x'], histories[m_type]['y'], 
                 color=colors.get(m_type, 'black'), linewidth=2.5, 
                 label=f'{m_type.capitalize()} Trajectory', alpha=0.8)
     wp_x = [wp[0] for wp in waypoints]
     wp_y = [wp[1] for wp in waypoints]
-    ax1.plot(wp_x[0], wp_y[0], 'go', markersize=12, label='Start', zorder=5)
-    ax1.plot(wp_x[-1], wp_y[-1], 'r*', markersize=18, label='Goal', zorder=5)
-    ax1.set_xlabel('X [m]', fontsize=11)
-    ax1.set_ylabel('Y [m]', fontsize=11)
+    ax1.plot(wp_x[0], wp_y[0], marker='o', color=PALETTE['start'], markersize=10, label='Start', zorder=5)
+    ax1.set_xlabel('X [m]', fontsize=11, fontweight='bold')
     ax1.set_title(f'{scenario_name} - Trajectories', fontsize=12, fontweight='bold')
     ax1.legend(fontsize=9, loc='best')
-    ax1.grid(True, alpha=0.3)
+    ax1.grid(True)
     ax1.set_aspect('equal')
     
     # Plot 2: Cross-Track Error (CTE)
     ax2 = plt.subplot(2, 3, 2)
+    ax2.set_facecolor(PALETTE['axes'])
     for m_type in models_to_use:
         ax2.plot(histories[m_type]['time'], histories[m_type]['cte'], 
-                color=colors.get(m_type, 'black'), linewidth=2, 
-                label=f'{m_type.capitalize()}', alpha=0.8)
-    ax2.axhline(0, color='k', linestyle='--', alpha=0.3)
+                color=colors.get(m_type, 'black'), linewidth=2.1, 
+                label=f'{m_type.capitalize()}', alpha=0.85)
+    ax2.axhline(0, color='#666666', linestyle='--', alpha=0.4, linewidth=1.5)
     ax2.set_xlabel('Time [s]', fontsize=11)
     ax2.set_ylabel('CTE [m]', fontsize=11)
     ax2.set_title('Cross-Track Error (Stability)', fontsize=12, fontweight='bold')
-    ax2.legend(fontsize=10)
-    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=10, framealpha=0.95)
+    ax2.grid(True, linewidth=0.5, linestyle=':')
     
     # Plot 3: Steering Angle
     ax3 = plt.subplot(2, 3, 3)
+    ax3.set_facecolor(PALETTE['axes'])
     for m_type in models_to_use:
         ax3.plot(histories[m_type]['time'], np.degrees(histories[m_type]['steer']), 
-                color=colors.get(m_type, 'black'), linewidth=2, 
-                label=f'{m_type.capitalize()}', alpha=0.8)
+                color=colors.get(m_type, 'black'), linewidth=2.1, 
+                label=f'{m_type.capitalize()}', alpha=0.85)
     ax3.set_xlabel('Time [s]', fontsize=11)
     ax3.set_ylabel('Steering Angle [deg]', fontsize=11)
     ax3.set_title('Steering Command', fontsize=12, fontweight='bold')
-    ax3.legend(fontsize=10)
-    ax3.grid(True, alpha=0.3)
+    ax3.legend(fontsize=10, framealpha=0.95)
+    ax3.grid(True, linewidth=0.5, linestyle=':')
     
     # Plot 4: Speed Profile
     ax4 = plt.subplot(2, 3, 4)
+    ax4.set_facecolor(PALETTE['axes'])
     for m_type in models_to_use:
         ax4.plot(histories[m_type]['time'], histories[m_type]['v'], 
-                color=colors.get(m_type, 'black'), linewidth=2, 
-                label=f'{m_type.capitalize()}', alpha=0.8)
+                color=colors.get(m_type, 'black'), linewidth=2.1, 
+                label=f'{m_type.capitalize()}', alpha=0.85)
     ax4.set_xlabel('Time [s]', fontsize=11)
     ax4.set_ylabel('Speed [m/s]', fontsize=11)
     ax4.set_title('Velocity Profile', fontsize=12, fontweight='bold')
-    ax4.legend(fontsize=10)
-    ax4.grid(True, alpha=0.3)
+    ax4.legend(fontsize=10, framealpha=0.95)
+    ax4.grid(True, linewidth=0.5, linestyle=':')
     
     # Plot 5: Yaw Angle
     ax5 = plt.subplot(2, 3, 5)
+    ax5.set_facecolor(PALETTE['axes'])
     for m_type in models_to_use:
         ax5.plot(histories[m_type]['time'], np.degrees(histories[m_type]['yaw']), 
-                color=colors.get(m_type, 'black'), linewidth=2, 
-                label=f'{m_type.capitalize()}', alpha=0.8)
+                color=colors.get(m_type, 'black'), linewidth=2.1, 
+                label=f'{m_type.capitalize()}', alpha=0.85)
     ax5.set_xlabel('Time [s]', fontsize=11)
     ax5.set_ylabel('Yaw Angle [deg]', fontsize=11)
     ax5.set_title('Vehicle Heading', fontsize=12, fontweight='bold')
-    ax5.legend(fontsize=10)
-    ax5.grid(True, alpha=0.3)
+    ax5.legend(fontsize=10, framealpha=0.95)
+    ax5.grid(True, linewidth=0.5, linestyle=':')
     
     # Plot 6: Performance Metrics Radar
     ax6 = plt.subplot(2, 3, 6, projection='polar')
+    ax6.set_facecolor(PALETTE['axes'])
     metrics = ['CTE\nAccuracy', 'Speed\nStability', 'Steer\nSmoothing', 'Path\nTracking']
     angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
     angles += angles[:1]
@@ -636,8 +887,8 @@ def generate_analysis_plots(scenario_name, models_to_use, histories, path_x, pat
         values += values[:1]
         
         ax6.plot(angles, values, 'o-', linewidth=2.5, markersize=6,
-                label=f'{m_type.capitalize()}', color=colors.get(m_type, 'black'), alpha=0.8)
-        ax6.fill(angles, values, alpha=0.15, color=colors.get(m_type, 'black'))
+            label=f'{m_type.capitalize()}', color=colors.get(m_type, 'black'), alpha=0.85)
+        ax6.fill(angles, values, alpha=0.18, color=colors.get(m_type, 'black'))
     
     ax6.set_xticks(angles[:-1])
     ax6.set_xticklabels(metrics, fontsize=10)
@@ -719,7 +970,7 @@ if __name__ == "__main__":
             'name': 'Urban Blocks',
             'map': 'urban',
             'size': 80,
-            'waypoints': [(5.0, 5.0), (35.0, 5.0), (35.0, 40.0), (70.0, 40.0), (70.0, 70.0)],
+            'waypoints': [(15.0, 5.0), (30.0, 2.5), (30.0, 18.5), (46.5, 18.5), (46.5, 50.5), (62.5, 50.5), (62.5, 75.0)],
             'speed': 4.0,
             'output': scenario_output('Urban Blocks')
         },
@@ -727,7 +978,7 @@ if __name__ == "__main__":
             'name': 'Warehouse Aisles',
             'map': 'warehouse',
             'size': 70,
-            'waypoints': [(5.0, 5.0), (5.0, 30.0), (20.0, 30.0), (20.0, 60.0), (60.0, 60.0)],
+            'waypoints': [(3.0, 3.0), (3.0, 15.0), (20.0, 15.0), (20.0, 25.0), (40.0, 25.0), (40.0, 50.0), (65.0, 50.0)],
             'speed': 3.5,
             'output': scenario_output('Warehouse Aisles')
         },

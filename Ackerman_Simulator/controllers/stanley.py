@@ -32,8 +32,8 @@ class StanleyController:
         distances = np.hypot(front_axle_x - path_x, front_axle_y - path_y)
         nearest_idx = np.argmin(distances)
         
-        # Use nearest point for cross-track error, but target_idx for heading
-        # This prevents the error from growing when looking ahead
+        # Clamp to path bounds
+        nearest_idx = max(0, min(nearest_idx, len(path_x) - 1))
 
         # 2. Calculate path heading at nearest point
         if nearest_idx < len(path_x) - 1:
@@ -44,11 +44,6 @@ class StanleyController:
             dy = path_y[nearest_idx] - path_y[nearest_idx - 1]
         
         path_yaw = np.arctan2(dy, dx)
-        
-        # 3. Calculate heading error (theta_e)
-        heading_error = path_yaw - yaw
-        # Normalize to [-pi, pi]
-        heading_error = np.arctan2(np.sin(heading_error), np.cos(heading_error))
 
         # 4. Calculate cross-track error (e)
         # Vector from nearest path point to front axle
@@ -73,6 +68,36 @@ class StanleyController:
                 # Scale gain up to 2x for large errors
                 recovery_factor = 1.0 + (abs_error - 3.0) / 10.0
                 k_adaptive = self.k * np.clip(recovery_factor, 1.0, 2.0)
+
+        # Goal convergence zone: Near end of path, add attraction to goal
+        # This prevents oscillation when vehicle overshoots near goal
+        path_completion = nearest_idx / max(len(path_x) - 1, 1)
+        if path_completion > 0.85:  # In final 15% of path
+            # Use goal point as reference instead of path end
+            goal_x = path_x[-1]
+            goal_y = path_y[-1]
+            goal_dx = goal_x - front_axle_x
+            goal_dy = goal_y - front_axle_y
+            goal_dist = np.hypot(goal_dx, goal_dy)
+            
+            # Goal heading (where we want to point)
+            if goal_dist > 0.5:
+                goal_heading = np.arctan2(goal_dy, goal_dx)
+                heading_to_goal = goal_heading - yaw
+                heading_to_goal = np.arctan2(np.sin(heading_to_goal), np.cos(heading_to_goal))
+                
+                # Use goal heading instead of path heading in final zone
+                heading_error = heading_to_goal
+                cross_track_error *= max(0, 1.0 - (path_completion - 0.85) / 0.15)  # Fade out CTE
+            else:
+                # Very close to goal - stop steering
+                heading_error = 0
+                cross_track_error = 0
+        else:
+            # Use heading error from path
+            heading_error = path_yaw - yaw
+            # Normalize to [-pi, pi]
+            heading_error = np.arctan2(np.sin(heading_error), np.cos(heading_error))
 
         # 6. Stanley control law
         # delta = theta_e + arctan(k * e / (v + k_soft))
